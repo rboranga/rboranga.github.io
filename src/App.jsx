@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Film, Star, Share2, LogOut, User as UserIcon, Plus, Search, Check, AlertCircle } from 'lucide-react';
+import { Film, Star, Share2, LogOut, User as UserIcon, Plus, Search, Check, AlertCircle, Copy } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
+  getAuth, signInAnonymously, onAuthStateChanged, 
   createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut 
 } from 'firebase/auth';
 import { 
   getFirestore, collection, onSnapshot, addDoc, updateDoc, doc, deleteDoc 
 } from 'firebase/firestore';
 
-// --- 1. CONFIGURAÇÃO FIREBASE (Usando variáveis de ambiente) ---
+// --- 1. CONFIGURAÇÃO FIREBASE (Protegida) ---
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -82,6 +82,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [dbError, setDbError] = useState(''); 
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -104,7 +105,7 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const sharedUserId = params.get('user');
     if (sharedUserId) {
-      setTargetUserId(sharedUserId);
+      setTargetUserId(sharedUserId.trim()); 
       setView('publicList');
     }
 
@@ -119,8 +120,10 @@ export default function App() {
       const allMovies = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       allMovies.sort((a, b) => b.createdAt - a.createdAt);
       setMovies(allMovies);
+      setDbError(''); 
     }, (error) => {
       console.error("Erro ao buscar filmes:", error);
+      setDbError(`Erro de conexão com o banco (${error.code}). Verifique as regras do Firestore!`);
     });
 
     return () => unsubscribe();
@@ -163,16 +166,19 @@ export default function App() {
     setErrorMsg('');
     setSuccessMsg('');
     
+    // REDIRECIONAMENTO SE FOR VISITANTE
     if (!user || user.isAnonymous) {
-      setErrorMsg('Crie uma conta para adicionar filmes.');
+      setIsRegistering(true); // Muda a aba do formulário para "Criar Conta"
+      setView('dashboard');
       return;
     }
 
-    const imdbRegex = /imdb\.com\/title\/(tt\d+)/i;
+    // REGEX ATUALIZADO (Aceita m.imdb, /pt/, query params)
+    const imdbRegex = /imdb\.com(?:\/[a-zA-Z-]+)?\/title\/(tt\d+)/i;
     const match = imdbLink.match(imdbRegex);
     
     if (!match || !match[1]) {
-      setErrorMsg('Link inválido. Cole a URL completa do IMDb.');
+      setErrorMsg('Link inválido. Cole uma URL do IMDb aceita.');
       return;
     }
 
@@ -244,6 +250,21 @@ export default function App() {
     document.body.removeChild(textArea);
   };
 
+  const copyMyId = () => {
+    if (!user) return;
+    const textArea = document.createElement("textarea");
+    textArea.value = user.uid;
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      alert('Seu Código ID foi copiado com sucesso!');
+    } catch (err) {
+      alert('Erro ao copiar.');
+    }
+    document.body.removeChild(textArea);
+  };
+
   const calculateAverageRating = (ratings) => {
     if (!ratings) return 0;
     const values = Object.values(ratings);
@@ -252,7 +273,9 @@ export default function App() {
     return (sum / values.length).toFixed(1);
   };
 
-  const showAuthForm = view === 'dashboard' && user?.isAnonymous;
+  // Trava de segurança para garantir que o Dashboard não carregue para visitantes
+  const isGuest = !user || user.isAnonymous;
+  const showAuthForm = view === 'dashboard' && isGuest;
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 font-sans">
@@ -271,7 +294,7 @@ export default function App() {
           </div>
           
           <div className="flex items-center space-x-4">
-            {!user?.isAnonymous ? (
+            {!isGuest ? (
               <div className="flex items-center space-x-4">
                 <span className="text-sm text-gray-400 hidden sm:inline">{user?.email}</span>
                 <button 
@@ -291,6 +314,14 @@ export default function App() {
 
       <main className="max-w-5xl mx-auto px-4 py-8">
         
+        {dbError && (
+          <div className="mb-6 bg-red-900/40 border border-red-500 text-red-200 p-4 rounded-xl flex items-center shadow-lg">
+             <AlertCircle className="mr-3 flex-shrink-0" size={24} />
+             <p>{dbError}</p>
+          </div>
+        )}
+
+        {/* TELA DE AUTENTICAÇÃO */}
         {showAuthForm && (
           <div className="max-w-md mx-auto bg-gray-800 p-8 rounded-2xl shadow-xl border border-gray-700 mt-10">
             <div className="flex justify-center mb-6">
@@ -334,16 +365,29 @@ export default function App() {
           </div>
         )}
 
+        {/* PAINEL PRIVADO (Dashboard) */}
         {!showAuthForm && view === 'dashboard' && (
           <div className="space-y-8">
-            <div className="bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div>
                 <h2 className="text-2xl font-bold mb-1">Suas Indicações</h2>
-                <p className="text-gray-400 text-sm">Adicione filmes e compartilhe seu link.</p>
+                <p className="text-gray-400 text-sm mb-4">Adicione filmes e compartilhe seu link.</p>
+                
+                <div className="flex items-center bg-gray-900 px-3 py-2 rounded-lg border border-gray-700 w-fit">
+                   <span className="text-xs text-gray-500 mr-2">Seu Código:</span>
+                   <code className="text-sm text-red-400 font-mono select-all">{user?.uid}</code>
+                   <button 
+                     onClick={copyMyId} 
+                     className="ml-3 text-gray-400 hover:text-white transition" 
+                     title="Copiar Código"
+                   >
+                     <Copy size={16} />
+                   </button>
+                </div>
               </div>
               <button 
                 onClick={copyShareLink}
-                className="flex items-center px-5 py-2.5 bg-green-600 hover:bg-green-700 rounded-lg text-white font-medium transition whitespace-nowrap"
+                className="flex items-center px-5 py-3 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold transition whitespace-nowrap"
               >
                 <Share2 size={18} className="mr-2" />
                 Copiar Link da Lista
@@ -380,7 +424,12 @@ export default function App() {
                    className="flex-grow bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
                  />
                  <button 
-                   onClick={() => { if(friendSearchText) { setTargetUserId(friendSearchText); setView('publicList'); } }}
+                   onClick={() => { 
+                     if(friendSearchText) { 
+                       setTargetUserId(friendSearchText.trim()); 
+                       setView('publicList'); 
+                     } 
+                   }}
                    className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm font-medium"
                  >
                    Buscar
@@ -390,33 +439,38 @@ export default function App() {
           </div>
         )}
 
+        {/* LISTA PÚBLICA (Visão do Amigo) */}
         {!showAuthForm && view === 'publicList' && (
           <div className="mb-8 bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
               <h2 className="text-2xl font-bold mb-2 flex items-center">
                 <UserIcon className="mr-3 text-red-500" />
-                Indicações de um Amigo
+                Indicações do Amigo
               </h2>
-              <p className="text-gray-400 text-sm">
+              <p className="text-gray-400 text-sm mb-2">
                 Clique nas estrelas abaixo para avaliar os filmes indicados.
               </p>
+              <div className="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded inline-block">
+                Visualizando ID: <span className="text-red-400 font-mono">{targetUserId}</span>
+              </div>
             </div>
-            {!user?.isAnonymous && (
+            {!isGuest && (
               <button 
                 onClick={() => { setView('dashboard'); setTargetUserId(''); window.history.pushState({}, '', window.location.pathname); }}
-                className="text-sm px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition"
+                className="text-sm px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition mt-4 md:mt-0"
               >
                 Voltar ao meu painel
               </button>
             )}
-            {user?.isAnonymous && (
-              <button onClick={() => setView('dashboard')} className="text-sm px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-bold">
+            {isGuest && (
+              <button onClick={() => { setView('dashboard'); setIsRegistering(true); }} className="text-sm px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-bold mt-4 md:mt-0">
                 Criar minha própria lista
               </button>
             )}
           </div>
         )}
 
+        {/* RENDERIZAÇÃO DOS FILMES */}
         {!showAuthForm && (
           <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {displayedMovies.length === 0 ? (
