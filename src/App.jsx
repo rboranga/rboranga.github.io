@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Film, Star, Share2, LogOut, User as UserIcon, Plus, Search, Check, AlertCircle, Copy } from 'lucide-react';
+import { Film, Star, Share2, LogOut, User as UserIcon, Plus, Search, Check, AlertCircle, Copy, LogIn } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, signInAnonymously, onAuthStateChanged, 
-  createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut 
+  signInWithPopup, GoogleAuthProvider, signOut 
 } from 'firebase/auth';
 import { 
   getFirestore, collection, onSnapshot, addDoc, updateDoc, doc, deleteDoc 
 } from 'firebase/firestore';
 
-// --- 1. CONFIGURAÇÃO FIREBASE (Protegida) ---
+// --- 1. CONFIGURAÇÃO FIREBASE (Segura com Variáveis de Ambiente) ---
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -24,7 +24,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'cine-indica-app';
 
-// --- 2. CONFIGURAÇÃO DA API OMDb ---
+// --- 2. CONFIGURAÇÃO DA API OMDb (Segura) ---
 const OMDB_API_KEY = import.meta.env.VITE_OMDB_API_KEY; 
 
 const fetchMovieInfo = async (imdbId) => {
@@ -36,7 +36,7 @@ const fetchMovieInfo = async (imdbId) => {
     }
     throw new Error('Filme não encontrado na API.');
   } catch (error) {
-    console.error("Erro ao buscar dados:", error);
+    console.error("Erro ao obter dados:", error);
     throw error;
   }
 };
@@ -79,14 +79,12 @@ export default function App() {
   const [friendSearchText, setFriendSearchText] = useState('');
   
   const [imdbLink, setImdbLink] = useState('');
+  const [movieStatus, setMovieStatus] = useState('Quero assistir'); 
+  
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [dbError, setDbError] = useState(''); 
-  
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -122,8 +120,8 @@ export default function App() {
       setMovies(allMovies);
       setDbError(''); 
     }, (error) => {
-      console.error("Erro ao buscar filmes:", error);
-      setDbError(`Erro de conexão com o banco (${error.code}). Verifique as regras do Firestore!`);
+      console.error("Erro ao procurar filmes:", error);
+      setDbError(`Erro de ligação à base de dados (${error.code}). Verifique as regras do Firestore!`);
     });
 
     return () => unsubscribe();
@@ -136,20 +134,16 @@ export default function App() {
     return movies.filter(m => m.ownerId === user?.uid);
   }, [movies, view, targetUserId, user]);
 
-  const handleAuth = async (e) => {
-    e.preventDefault();
+  // INÍCIO DE SESSÃO COM GOOGLE
+  const handleGoogleLogin = async () => {
     setErrorMsg('');
+    const provider = new GoogleAuthProvider();
     try {
-      if (isRegistering) {
-        await createUserWithEmailAndPassword(auth, email, password);
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
-      setEmail('');
-      setPassword('');
+      await signInWithPopup(auth, provider);
       if (view !== 'publicList') setView('dashboard');
     } catch (err) {
-      setErrorMsg(err.message.includes('auth/') ? 'Credenciais inválidas ou e-mail já em uso.' : err.message);
+      console.error(err);
+      setErrorMsg('Erro ao iniciar sessão. Verifique se ativou o Google no painel do Firebase.');
     }
   };
 
@@ -168,23 +162,22 @@ export default function App() {
     
     // REDIRECIONAMENTO SE FOR VISITANTE
     if (!user || user.isAnonymous) {
-      setIsRegistering(true); // Muda a aba do formulário para "Criar Conta"
-      setView('dashboard');
+      setView('dashboard'); 
       return;
     }
 
-    // REGEX ATUALIZADO (Aceita m.imdb, /pt/, query params)
+    // REGEX (Aceita m.imdb, /pt/, query params)
     const imdbRegex = /imdb\.com(?:\/[a-zA-Z-]+)?\/title\/(tt\d+)/i;
     const match = imdbLink.match(imdbRegex);
     
     if (!match || !match[1]) {
-      setErrorMsg('Link inválido. Cole uma URL do IMDb aceita.');
+      setErrorMsg('Ligação inválida. Cole um URL do IMDb aceite.');
       return;
     }
 
     const imdbId = match[1];
     if (movies.some(m => m.ownerId === user.uid && m.imdbId === imdbId)) {
-      setErrorMsg('Você já indicou este filme!');
+      setErrorMsg('Já indicou este filme!');
       return;
     }
 
@@ -199,23 +192,35 @@ export default function App() {
         title: movieData.title,
         poster: movieData.poster,
         plot: movieData.plot,
+        status: movieStatus, 
         ratings: {},
         createdAt: Date.now()
       });
       
       setSuccessMsg('Filme adicionado com sucesso!');
       setImdbLink('');
+      setMovieStatus('Quero assistir'); 
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err) {
-      setErrorMsg('Erro ao buscar dados do filme. Verifique o link e sua chave da OMDb API.');
+      setErrorMsg('Erro ao obter dados do filme. Verifique a ligação e a sua chave da OMDb API.');
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleDeleteMovie = async (movieId) => {
-    if (confirm('Deseja realmente remover esta indicação?')) {
+    if (confirm('Deseja realmente remover este filme da sua lista?')) {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'recommendations', movieId));
+    }
+  };
+
+  const handleUpdateStatus = async (movieId, newStatus) => {
+    const movieRef = doc(db, 'artifacts', appId, 'public', 'data', 'recommendations', movieId);
+    try {
+      await updateDoc(movieRef, { status: newStatus });
+    } catch (err) {
+      console.error("Erro ao atualizar estado:", err);
+      alert("Erro ao guardar o novo estado.");
     }
   };
 
@@ -228,7 +233,7 @@ export default function App() {
       });
     } catch (err) {
       console.error("Erro ao votar:", err);
-      alert("Erro ao computar voto. Verifique as regras do Firestore.");
+      alert("Erro ao registar o voto. Verifique as regras do Firestore.");
     }
   };
 
@@ -243,9 +248,9 @@ export default function App() {
     textArea.select();
     try {
       document.execCommand('copy');
-      alert(`Link copiado! Envie para seus amigos:\n\n${shareUrl}`);
+      alert(`Ligação copiada! Envie aos seus amigos:\n\n${shareUrl}`);
     } catch (err) {
-      alert('Seu link é: ' + shareUrl);
+      alert('A sua ligação é: ' + shareUrl);
     }
     document.body.removeChild(textArea);
   };
@@ -258,7 +263,7 @@ export default function App() {
     textArea.select();
     try {
       document.execCommand('copy');
-      alert('Seu Código ID foi copiado com sucesso!');
+      alert('O seu Código ID foi copiado com sucesso!');
     } catch (err) {
       alert('Erro ao copiar.');
     }
@@ -273,12 +278,20 @@ export default function App() {
     return (sum / values.length).toFixed(1);
   };
 
-  // Trava de segurança para garantir que o Dashboard não carregue para visitantes
+  const getStatusColor = (status) => {
+    switch(status) {
+      case 'Favorito': return 'bg-purple-600/90 text-white border border-purple-400';
+      case 'Assistido': return 'bg-green-600/90 text-white border border-green-400';
+      case 'Quero assistir': return 'bg-blue-600/90 text-white border border-blue-400';
+      default: return 'bg-gray-700/90 text-gray-200 border border-gray-500'; 
+    }
+  };
+
   const isGuest = !user || user.isAnonymous;
   const showAuthForm = view === 'dashboard' && isGuest;
 
   return (
-    <div className="min-h-screen bg-gray-900 text-gray-100 font-sans">
+    <div className="min-h-screen bg-gray-900 text-gray-100 font-sans pb-10">
       <header className="bg-gray-800 border-b border-gray-700 shadow-lg sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
           <div 
@@ -300,7 +313,7 @@ export default function App() {
                 <button 
                   onClick={handleLogout}
                   className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition"
-                  title="Sair"
+                  title="Terminar Sessão"
                 >
                   <LogOut size={20} />
                 </button>
@@ -321,47 +334,32 @@ export default function App() {
           </div>
         )}
 
-        {/* TELA DE AUTENTICAÇÃO */}
+        {/* ECRÃ DE AUTENTICAÇÃO (Google) */}
         {showAuthForm && (
           <div className="max-w-md mx-auto bg-gray-800 p-8 rounded-2xl shadow-xl border border-gray-700 mt-10">
             <div className="flex justify-center mb-6">
               <UserIcon size={48} className="text-red-500" />
             </div>
-            <h2 className="text-2xl font-bold text-center mb-6">
-              {isRegistering ? 'Criar sua Conta' : 'Acesse sua Conta'}
+            <h2 className="text-2xl font-bold text-center mb-4">
+              Aceda à sua Conta
             </h2>
-            <p className="text-gray-400 text-center text-sm mb-6">
-              Faça login para gerenciar suas listas. Visitantes só podem votar nas listas dos amigos.
+            <p className="text-gray-400 text-center text-sm mb-8">
+              Crie as suas próprias listas de filmes e partilhe com amigos com um clique.
             </p>
             
-            <form onSubmit={handleAuth} className="space-y-4">
-              <div>
-                <input 
-                  type="email" placeholder="E-mail" required
-                  value={email} onChange={e => setEmail(e.target.value)}
-                  className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-1 focus:ring-red-500"
-                />
-              </div>
-              <div>
-                <input 
-                  type="password" placeholder="Senha" required
-                  value={password} onChange={e => setPassword(e.target.value)}
-                  className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-1 focus:ring-red-500"
-                />
-              </div>
-              
-              {errorMsg && <div className="text-red-400 text-sm bg-red-900/20 p-3 rounded-lg flex"><AlertCircle size={16} className="mr-2"/>{errorMsg}</div>}
+            <button 
+              onClick={handleGoogleLogin} 
+              className="w-full bg-white hover:bg-gray-100 text-gray-900 font-bold py-3.5 px-4 rounded-xl transition flex items-center justify-center shadow-md"
+            >
+              <LogIn className="mr-2" size={20} />
+              Entrar com o Google
+            </button>
 
-              <button type="submit" className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition">
-                {isRegistering ? 'Registrar' : 'Entrar'}
-              </button>
-            </form>
-            
-            <div className="mt-6 text-center">
-              <button onClick={() => setIsRegistering(!isRegistering)} className="text-gray-400 hover:text-white text-sm underline">
-                {isRegistering ? 'Já tem conta? Faça Login' : 'Não tem conta? Registre-se'}
-              </button>
-            </div>
+            {errorMsg && (
+              <div className="mt-4 text-red-400 text-sm bg-red-900/20 p-3 rounded-lg flex">
+                <AlertCircle size={16} className="mr-2 flex-shrink-0"/>{errorMsg}
+              </div>
+            )}
           </div>
         )}
 
@@ -370,11 +368,11 @@ export default function App() {
           <div className="space-y-8">
             <div className="bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div>
-                <h2 className="text-2xl font-bold mb-1">Suas Indicações</h2>
-                <p className="text-gray-400 text-sm mb-4">Adicione filmes e compartilhe seu link.</p>
+                <h2 className="text-2xl font-bold mb-1">As suas Indicações</h2>
+                <p className="text-gray-400 text-sm mb-4">Adicione filmes, organize e partilhe a sua lista.</p>
                 
                 <div className="flex items-center bg-gray-900 px-3 py-2 rounded-lg border border-gray-700 w-fit">
-                   <span className="text-xs text-gray-500 mr-2">Seu Código:</span>
+                   <span className="text-xs text-gray-500 mr-2">O seu Código:</span>
                    <code className="text-sm text-red-400 font-mono select-all">{user?.uid}</code>
                    <button 
                      onClick={copyMyId} 
@@ -387,16 +385,16 @@ export default function App() {
               </div>
               <button 
                 onClick={copyShareLink}
-                className="flex items-center px-5 py-3 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold transition whitespace-nowrap"
+                className="flex items-center px-5 py-3 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold transition shadow-lg whitespace-nowrap"
               >
                 <Share2 size={18} className="mr-2" />
-                Copiar Link da Lista
+                Copiar Ligação da Lista
               </button>
             </div>
 
             <form onSubmit={handleAddMovie} className="bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700">
-              <label className="block text-sm font-medium text-gray-300 mb-2">Cole o link do IMDb do filme:</label>
-              <div className="flex flex-col sm:flex-row gap-3">
+              <label className="block text-sm font-medium text-gray-300 mb-2">Cole a ligação do IMDb do filme:</label>
+              <div className="flex flex-col md:flex-row gap-3">
                 <div className="relative flex-grow">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Search size={18} className="text-gray-500" />
@@ -407,8 +405,19 @@ export default function App() {
                     className="w-full bg-gray-900 border border-gray-600 rounded-lg pl-10 pr-4 py-3 text-white focus:ring-1 focus:ring-red-500"
                   />
                 </div>
-                <button type="submit" disabled={isLoading} className="flex items-center justify-center px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg font-bold">
-                  {isLoading ? 'Buscando...' : <><Plus size={20} className="mr-2"/> Adicionar</>}
+                
+                <select 
+                  value={movieStatus} 
+                  onChange={(e) => setMovieStatus(e.target.value)}
+                  className="bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-1 focus:ring-red-500 outline-none"
+                >
+                  <option value="Quero assistir">🍿 Quero assistir</option>
+                  <option value="Assistido">✅ Assistido</option>
+                  <option value="Favorito">⭐ Favorito</option>
+                </select>
+
+                <button type="submit" disabled={isLoading} className="flex items-center justify-center px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg font-bold shadow-md">
+                  {isLoading ? 'A procurar...' : <><Plus size={20} className="mr-2"/> Adicionar</>}
                 </button>
               </div>
               {successMsg && <p className="text-green-400 text-sm mt-3 flex items-center"><Check size={14} className="mr-1"/> {successMsg}</p>}
@@ -416,12 +425,12 @@ export default function App() {
             </form>
 
             <div className="bg-gray-800/50 rounded-2xl p-6 border border-gray-700">
-               <h3 className="text-md font-bold text-gray-300 mb-3">Quer ver a lista de um amigo sem o link?</h3>
+               <h3 className="text-md font-bold text-gray-300 mb-3">Quer ver a lista de um amigo sem a ligação?</h3>
                <div className="flex gap-2 max-w-md">
                  <input 
                    type="text" placeholder="Cole o ID do amigo aqui..."
                    value={friendSearchText} onChange={e => setFriendSearchText(e.target.value)}
-                   className="flex-grow bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
+                   className="flex-grow bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500"
                  />
                  <button 
                    onClick={() => { 
@@ -430,9 +439,9 @@ export default function App() {
                        setView('publicList'); 
                      } 
                    }}
-                   className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm font-medium"
+                   className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm font-medium transition"
                  >
-                   Buscar
+                   Procurar
                  </button>
                </div>
             </div>
@@ -445,13 +454,13 @@ export default function App() {
             <div>
               <h2 className="text-2xl font-bold mb-2 flex items-center">
                 <UserIcon className="mr-3 text-red-500" />
-                Indicações do Amigo
+                Lista do Amigo
               </h2>
               <p className="text-gray-400 text-sm mb-2">
-                Clique nas estrelas abaixo para avaliar os filmes indicados.
+                Veja a organização do seu amigo e avalie os filmes indicados.
               </p>
               <div className="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded inline-block">
-                Visualizando ID: <span className="text-red-400 font-mono">{targetUserId}</span>
+                A visualizar ID: <span className="text-red-400 font-mono">{targetUserId}</span>
               </div>
             </div>
             {!isGuest && (
@@ -463,8 +472,8 @@ export default function App() {
               </button>
             )}
             {isGuest && (
-              <button onClick={() => { setView('dashboard'); setIsRegistering(true); }} className="text-sm px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-bold mt-4 md:mt-0">
-                Criar minha própria lista
+              <button onClick={() => { setView('dashboard'); }} className="text-sm px-4 py-2 bg-red-600 hover:bg-red-700 shadow-md rounded-lg font-bold mt-4 md:mt-0 flex items-center">
+                 <LogIn size={16} className="mr-2"/> Iniciar Sessão
               </button>
             )}
           </div>
@@ -476,7 +485,7 @@ export default function App() {
             {displayedMovies.length === 0 ? (
               <div className="col-span-full py-16 text-center text-gray-500">
                 <Film size={48} className="mx-auto mb-4 opacity-20" />
-                <p>{view === 'publicList' ? 'Nenhuma indicação encontrada para este usuário.' : 'Você ainda não adicionou nenhum filme.'}</p>
+                <p>{view === 'publicList' ? 'Nenhuma indicação encontrada para este utilizador.' : 'A sua lista está vazia! Que tal adicionar um filme?'}</p>
               </div>
             ) : (
               displayedMovies.map((movie) => {
@@ -484,6 +493,8 @@ export default function App() {
                 const userRating = movie.ratings?.[user?.uid] || 0;
                 const totalRatingsCount = movie.ratings ? Object.keys(movie.ratings).length : 0;
                 const avgRating = calculateAverageRating(movie.ratings);
+                
+                const currentStatus = movie.status || 'Quero assistir';
 
                 return (
                   <div key={movie.id} className="bg-gray-800 rounded-2xl overflow-hidden shadow-xl border border-gray-700 flex flex-col group">
@@ -492,10 +503,16 @@ export default function App() {
                         src={movie.poster} alt={movie.title}
                         className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                       />
-                      <div className="absolute top-0 right-0 bg-black/70 backdrop-blur-sm text-white px-3 py-1 m-2 rounded-full flex items-center text-sm font-bold">
+                      <div className="absolute top-0 right-0 bg-black/70 backdrop-blur-sm text-white px-3 py-1 m-2 rounded-full flex items-center text-sm font-bold shadow-md">
                         <Star size={14} className="text-yellow-400 fill-yellow-400 mr-1" />
                         {avgRating}
                       </div>
+                      
+                      {!isOwner && (
+                        <div className={`absolute bottom-0 left-0 text-xs font-bold px-3 py-1.5 m-2 rounded-lg shadow-md backdrop-blur-md ${getStatusColor(currentStatus)}`}>
+                          {currentStatus}
+                        </div>
+                      )}
                     </div>
                     
                     <div className="p-5 flex-grow flex flex-col">
@@ -504,17 +521,32 @@ export default function App() {
                       
                       <div className="mt-auto pt-4 border-t border-gray-700">
                         {isOwner ? (
-                          <div className="flex justify-between items-center">
-                            <div className="text-xs text-gray-400">
-                              {totalRatingsCount} {totalRatingsCount === 1 ? 'avaliação' : 'avaliações'}
+                          <div className="space-y-3">
+                            <div className="flex flex-col space-y-1">
+                              <span className="text-[10px] uppercase font-bold text-gray-500">Estado</span>
+                              <select 
+                                value={currentStatus}
+                                onChange={(e) => handleUpdateStatus(movie.id, e.target.value)}
+                                className={`text-xs p-1.5 rounded-md font-bold focus:outline-none focus:ring-1 focus:ring-gray-400 ${getStatusColor(currentStatus)}`}
+                              >
+                                <option value="Quero assistir" className="bg-gray-800 text-white">Quero assistir</option>
+                                <option value="Assistido" className="bg-gray-800 text-white">Assistido</option>
+                                <option value="Favorito" className="bg-gray-800 text-white">Favorito</option>
+                              </select>
                             </div>
-                            <button onClick={() => handleDeleteMovie(movie.id)} className="text-xs text-red-400 hover:text-red-300">
-                              Remover
-                            </button>
+                            
+                            <div className="flex justify-between items-center pt-2 border-t border-gray-700/50">
+                              <div className="text-xs text-gray-400">
+                                {totalRatingsCount} {totalRatingsCount === 1 ? 'voto' : 'votos'}
+                              </div>
+                              <button onClick={() => handleDeleteMovie(movie.id)} className="text-xs text-red-400 hover:text-red-300 font-medium">
+                                Remover
+                              </button>
+                            </div>
                           </div>
                         ) : (
                           <div className="space-y-2">
-                            <p className="text-xs text-gray-400 font-medium">Sua nota para este filme:</p>
+                            <p className="text-xs text-gray-400 font-medium">A sua nota para este filme:</p>
                             <StarRating rating={userRating} onRate={(val) => handleRateMovie(movie.id, movie.ratings, val)} readonly={false} />
                           </div>
                         )}
