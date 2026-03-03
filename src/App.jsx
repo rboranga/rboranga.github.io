@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Film, Star, Share2, LogOut, User as UserIcon, Plus, Search, Check, AlertCircle, Copy, LogIn, Filter, BookmarkPlus, Bookmark, Trash2, Shield, FileText, Globe, ListVideo, Heart } from 'lucide-react';
+import { Film, Star, Share2, LogOut, User as UserIcon, Plus, Search, Check, AlertCircle, Copy, LogIn, Filter, BookmarkPlus, Bookmark, Trash2, Shield, FileText, Globe, ListVideo, Heart, HelpCircle, Info } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, signInAnonymously, onAuthStateChanged, 
@@ -11,12 +11,12 @@ import {
 
 // --- 1. CONFIGURAÇÃO FIREBASE (Fallback para o Canvas) ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-	apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-	authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-	projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-	storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-	messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-	appId: import.meta.env.VITE_FIREBASE_APP_ID
+apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);
@@ -75,7 +75,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [movies, setMovies] = useState([]);
   const [savedLists, setSavedLists] = useState([]); 
-  const [view, setView] = useState('landing'); // landing, dashboard, publicList, privacy, terms
+  const [view, setView] = useState('landing'); 
   const [targetUserId, setTargetUserId] = useState(''); 
   const [friendSearchText, setFriendSearchText] = useState('');
   
@@ -87,6 +87,12 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [dbError, setDbError] = useState(''); 
+
+  // Função de navegação com auto-scroll para o topo (Resolve o ecrã em branco)
+  const navigateTo = (newView) => {
+    setView(newView);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   // Inicialização e Auth
   useEffect(() => {
@@ -102,7 +108,6 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       
-      // Controlo de vista inicial baseado no login
       const params = new URLSearchParams(window.location.search);
       const sharedUserId = params.get('user');
       
@@ -164,7 +169,6 @@ export default function App() {
     } else if (view === 'dashboard') {
       list = movies.filter(m => m.ownerId === user?.uid);
     } else if (view === 'landing') {
-      // Na landing page mostra os 10 últimos filmes adicionados globalmente (Conteúdo para o AdSense!)
       return movies.slice(0, 10);
     } else {
       return []; 
@@ -183,7 +187,7 @@ export default function App() {
     try {
       await signInWithPopup(auth, provider);
       if (view !== 'publicList') {
-        setView('dashboard');
+        navigateTo('dashboard');
         setActiveFilter('Todos');
       }
     } catch (err) {
@@ -195,7 +199,7 @@ export default function App() {
   const handleLogout = async () => {
     await signOut(auth);
     await signInAnonymously(auth);
-    setView('landing');
+    navigateTo('landing');
     setTargetUserId('');
     setActiveFilter('Todos');
     window.history.pushState({}, document.title, window.location.pathname);
@@ -244,7 +248,7 @@ export default function App() {
       setMovieStatus('Quero assistir'); 
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err) {
-      setErrorMsg('Erro ao obter dados do filme. Verifique o link e a sua chave da OMDb API.');
+      setErrorMsg('Erro ao obter dados do filme. Verifique a ligação e a sua chave da OMDb API.');
     } finally {
       setIsLoading(false);
     }
@@ -352,9 +356,9 @@ export default function App() {
     textArea.select();
     try {
       document.execCommand('copy');
-      alert(`Link copiado! Envie aos seus amigos:\n\n${shareUrl}`);
+      alert(`Ligação copiada! Envie aos seus amigos:\n\n${shareUrl}`);
     } catch (err) {
-      alert('O seu link é: ' + shareUrl);
+      alert('A sua ligação é: ' + shareUrl);
     }
     document.body.removeChild(textArea);
   };
@@ -401,7 +405,7 @@ export default function App() {
           <div 
             className="flex items-center space-x-2 cursor-pointer"
             onClick={() => { 
-              setView(isGuest ? 'landing' : 'dashboard'); 
+              navigateTo(isGuest ? 'landing' : 'dashboard'); 
               setTargetUserId(''); 
               setActiveFilter('Todos');
               window.history.pushState({}, document.title, window.location.pathname);
@@ -479,7 +483,7 @@ export default function App() {
                   </div>
                   <h3 className="text-xl font-bold text-white mb-4">Organize Tudo</h3>
                   <p className="text-gray-400 text-sm leading-relaxed">
-                    Mantenha um registo perfeito separando os filmes entre "Quero Assistir", "Já Assistidos" e "Favoritos". Nunca mais se esqueça daquele filme que lhe recomendaram.
+                    Mantenha um registo perfeito separando os filmes entre "Quero Assistir", "Já Assistidos" e "Favoritos". Nunca mais se esqueça daquele filme que lhe recomendaram numa conversa.
                   </p>
                 </div>
                 <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 text-center shadow-lg">
@@ -488,7 +492,7 @@ export default function App() {
                   </div>
                   <h3 className="text-xl font-bold text-white mb-4">Partilhe com Amigos</h3>
                   <p className="text-gray-400 text-sm leading-relaxed">
-                    Gere uma ligação única para o seu perfil e envie aos seus amigos. Eles poderão ver a sua lista e dar notas aos filmes que você recomendou.
+                    Gere uma ligação única para o seu perfil e envie aos seus amigos. Eles poderão ver a sua lista completa e dar notas aos filmes que você recomendou com base nas experiências deles.
                   </p>
                 </div>
                 <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 text-center shadow-lg">
@@ -497,14 +501,55 @@ export default function App() {
                   </div>
                   <h3 className="text-xl font-bold text-white mb-4">Acompanhe Outros</h3>
                   <p className="text-gray-400 text-sm leading-relaxed">
-                    Siga o perfil dos seus amigos, veja o que eles estão a assistir e guarde as listas deles no seu painel para acesso rápido sempre que precisar de inspiração.
+                    Siga o perfil dos seus amigos, veja o que eles estão a assistir e guarde as listas deles no seu painel para acesso rápido sempre que precisar de inspiração para a sua próxima sessão de cinema.
                   </p>
                 </div>
               </div>
             </div>
 
+            {/* SEÇÃO DE TEXTO MASSIVO PARA O ADSENSE (FAQ e Sobre) */}
+            <div className="bg-gray-800 border-t border-gray-700 py-16">
+              <div className="max-w-4xl mx-auto px-4">
+                <div className="mb-12">
+                  <h3 className="text-2xl font-bold text-white flex items-center mb-4">
+                    <Info className="mr-3 text-red-500" size={28} />
+                    Sobre o Cine Indica
+                  </h3>
+                  <div className="text-gray-400 space-y-4 text-base leading-relaxed">
+                    <p>
+                      O Cine Indica nasceu da paixão pelo cinema e da necessidade de ter um espaço simples e organizado para guardar os títulos que não queremos esquecer. Quantas vezes alguém lhe recomendou um filme excelente, mas no momento de escolher o que assistir em casa, o nome desapareceu da sua memória? A nossa plataforma resolve exatamente esse problema.
+                    </p>
+                    <p>
+                      Funcionando como uma estante virtual ou um diário de visualização, oferecemos uma interface limpa, focada no conteúdo visual das capas dos filmes e sinopses diretas. A integração com bases de dados mundiais garante que qualquer título, desde os maiores sucessos de bilheteira de Hollywood até aos clássicos do cinema independente, possa ser encontrado e adicionado à sua coleção pessoal com apenas alguns cliques.
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-2xl font-bold text-white flex items-center mb-6">
+                    <HelpCircle className="mr-3 text-red-500" size={28} />
+                    Perguntas Frequentes (FAQ)
+                  </h3>
+                  <div className="space-y-6">
+                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-700">
+                      <h4 className="font-bold text-white mb-2">1. O serviço é totalmente gratuito?</h4>
+                      <p className="text-gray-400 text-sm leading-relaxed">Sim! A criação da conta, a adição de filmes ilimitados e a partilha de listas são funcionalidades 100% gratuitas para todos os utilizadores.</p>
+                    </div>
+                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-700">
+                      <h4 className="font-bold text-white mb-2">2. Como funciona o sistema de "Status"?</h4>
+                      <p className="text-gray-400 text-sm leading-relaxed">Cada filme que adiciona pode ser categorizado através de etiquetas. Pode marcá-lo como "Quero assistir" para a sua lista de pendências, "Assistido" para o seu histórico, ou "Favorito" para aquelas obras-primas que recomenda a todos.</p>
+                    </div>
+                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-700">
+                      <h4 className="font-bold text-white mb-2">3. Os meus amigos precisam de ter conta para ver a minha lista?</h4>
+                      <p className="text-gray-400 text-sm leading-relaxed">Não necessariamente. Qualquer pessoa com o seu link público pode visualizar os filmes que adicionou. No entanto, se eles quiserem votar nas estrelas ou copiar um filme da sua lista para a deles, será necessário fazer um login rápido através do Google.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Public Feed Section */}
-            <div className="max-w-5xl mx-auto px-4 pb-16 w-full">
+            <div className="max-w-5xl mx-auto px-4 py-16 w-full">
               <div className="flex items-center justify-between mb-8">
                 <h3 className="text-2xl font-bold text-white flex items-center">
                   <Heart className="mr-3 text-red-500" size={28} />
@@ -558,7 +603,7 @@ export default function App() {
                   <p>O nosso site utiliza cookies para manter a sua sessão ativa. Adicionalmente, permitimos que empresas de terceiros (como o Google AdSense/AdMob) apresentem anúncios quando visita o nosso site. Estas empresas podem utilizar informações não pessoais (como o tipo de navegador, hora e data, tema dos anúncios clicados) durante as suas visitas a este e outros sites, de forma a apresentar anúncios de bens e serviços que possam ser do seu interesse (cookies DART ou similares).</p>
                   <h3 className="text-lg font-bold text-white mt-6">3. Segurança dos Dados</h3>
                   <p>Todos os dados são armazenados de forma segura utilizando a infraestrutura da Google Cloud (Firebase). As suas listas privadas (como os amigos que acompanha) não são visíveis publicamente.</p>
-                  <button onClick={() => setView(isGuest ? 'landing' : 'dashboard')} className="mt-8 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold">Voltar</button>
+                  <button onClick={() => navigateTo(isGuest ? 'landing' : 'dashboard')} className="mt-8 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold transition">Voltar</button>
                </div>
             </div>
           </div>
@@ -576,7 +621,7 @@ export default function App() {
                   <p>As listas, filmes adicionados e notas dadas são da responsabilidade do utilizador. Reservamo-nos o direito de remover conteúdos ou banir contas que partilhem links maliciosos ou violem as políticas do serviço.</p>
                   <h3 className="text-lg font-bold text-white mt-6">3. Limitação de Responsabilidade</h3>
                   <p>Os dados dos filmes são fornecidos através de APIs públicas (OMDb). Não garantimos a exatidão, disponibilidade contínua ou atualizações instantâneas das sinopses e capas exibidas.</p>
-                  <button onClick={() => setView(isGuest ? 'landing' : 'dashboard')} className="mt-8 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold">Voltar</button>
+                  <button onClick={() => navigateTo(isGuest ? 'landing' : 'dashboard')} className="mt-8 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold transition">Voltar</button>
                </div>
             </div>
           </div>
@@ -644,7 +689,6 @@ export default function App() {
             </form>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Pesquisar novo amigo */}
               <div className="bg-gray-800/50 rounded-2xl p-6 border border-gray-700">
                  <h3 className="text-md font-bold text-gray-300 mb-3">Pesquisar lista de um amigo</h3>
                  <div className="flex gap-2">
@@ -657,7 +701,7 @@ export default function App() {
                      onClick={() => { 
                        if(friendSearchText) { 
                          setTargetUserId(friendSearchText.trim()); 
-                         setView('publicList'); 
+                         navigateTo('publicList'); 
                          setActiveFilter('Todos');
                        } 
                      }}
@@ -668,7 +712,6 @@ export default function App() {
                  </div>
               </div>
 
-              {/* Listas Salvas */}
               {savedLists.length > 0 && (
                 <div className="bg-gray-800/50 rounded-2xl p-6 border border-gray-700 flex flex-col h-full max-h-[250px] overflow-y-auto scrollbar-hide">
                    <h3 className="text-md font-bold text-gray-300 mb-3 flex items-center">
@@ -679,7 +722,7 @@ export default function App() {
                        <div key={list.id} className="bg-gray-900 border border-gray-700 rounded-lg p-3 flex items-center justify-between">
                           <div 
                             className="cursor-pointer flex-grow overflow-hidden" 
-                            onClick={() => { setTargetUserId(list.friendId); setView('publicList'); setActiveFilter('Todos'); }}
+                            onClick={() => { setTargetUserId(list.friendId); navigateTo('publicList'); setActiveFilter('Todos'); }}
                           >
                              <p className="font-bold text-sm text-gray-200 truncate hover:text-red-400 transition">{list.name}</p>
                           </div>
@@ -732,7 +775,7 @@ export default function App() {
                 )}
                 
                 <button 
-                  onClick={() => { setView(isGuest ? 'landing' : 'dashboard'); setTargetUserId(''); setActiveFilter('Todos'); window.history.pushState({}, '', window.location.pathname); }}
+                  onClick={() => { navigateTo(isGuest ? 'landing' : 'dashboard'); setTargetUserId(''); setActiveFilter('Todos'); window.history.pushState({}, '', window.location.pathname); }}
                   className="text-sm px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition flex justify-center"
                 >
                   Voltar
@@ -780,7 +823,6 @@ export default function App() {
                   return (
                     <div key={movie.id} className="bg-gray-800 rounded-xl overflow-hidden shadow-lg border border-gray-700 flex flex-col group relative">
                       
-                      {/* Capa do Filme */}
                       <div className="relative aspect-[2/3] w-full bg-gray-900 overflow-hidden">
                         <img 
                           src={movie.poster} alt={movie.title}
@@ -864,8 +906,8 @@ export default function App() {
             &copy; {new Date().getFullYear()} Cine Indica. Todos os direitos reservados.
           </div>
           <div className="flex space-x-6 text-sm font-medium">
-            <button onClick={() => setView('privacy')} className="text-gray-400 hover:text-white transition">Política de Privacidade</button>
-            <button onClick={() => setView('terms')} className="text-gray-400 hover:text-white transition">Termos de Uso</button>
+            <button onClick={() => navigateTo('privacy')} className="text-gray-400 hover:text-white transition">Política de Privacidade</button>
+            <button onClick={() => navigateTo('terms')} className="text-gray-400 hover:text-white transition">Termos de Uso</button>
           </div>
         </div>
       </footer>
