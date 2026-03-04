@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Film, Star, Share2, LogOut, User as UserIcon, Plus, Search, Check, AlertCircle, Copy, LogIn, Filter, BookmarkPlus, Bookmark, Trash2, Shield, FileText, Globe, ListVideo, Heart, HelpCircle, Info } from 'lucide-react';
+import { Film, Star, Share2, LogOut, User as UserIcon, Plus, Search, Check, AlertCircle, Copy, LogIn, Filter, BookmarkPlus, Bookmark, Trash2, Shield, FileText, Globe, ListVideo, Heart, HelpCircle, Info, Sparkles, ChevronDown, Users } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, signInAnonymously, onAuthStateChanged, 
@@ -9,9 +9,9 @@ import {
   getFirestore, collection, onSnapshot, addDoc, updateDoc, doc, deleteDoc 
 } from 'firebase/firestore';
 
-// --- 1. CONFIGURAÇÃO FIREBASE (Fallback para o Canvas) ---
+// --- 1. CONFIGURAÇÃO FIREBASE (Tratamento para evitar erros de compilação no Canvas) ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+ apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
 authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
 projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
 storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
@@ -24,19 +24,37 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'cine-indica-app';
 
-// --- 2. CONFIGURAÇÃO DA API OMDb ---
-const OMDB_API_KEY = import.meta.env.VITE_OMDB_API_KEY; 
+// --- 2. CONFIGURAÇÃO DAS APIs (OMDb e Gemini) ---
+const OMDB_API_KEY = import.meta.env.VITE_OMDB_API_KEY;
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
-const fetchMovieInfo = async (imdbId) => {
+// Busca por ID (Usado na adição manual via link IMDb)
+const fetchMovieInfoById = async (imdbId) => {
   try {
     const response = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=${OMDB_API_KEY}&plot=short`);
     const data = await response.json();
     if (data.Response === "True") {
-      return { title: data.Title, poster: data.Poster !== 'N/A' ? data.Poster : '', plot: data.Plot };
+      return { imdbId: imdbId, title: data.Title, poster: data.Poster !== 'N/A' ? data.Poster : '', plot: data.Plot };
     }
     throw new Error('Filme não encontrado na API.');
   } catch (error) {
-    console.error("Erro ao obter dados:", error);
+    console.error("Erro ao obter dados por ID:", error);
+    throw error;
+  }
+};
+
+// Busca por Título Original (Usado pela IA para maior precisão)
+const fetchMovieInfoByTitle = async (title) => {
+  try {
+    // Adicionamos &type=movie para garantir que não tragamos séries ou episódios
+    const response = await fetch(`https://www.omdbapi.com/?t=${encodeURIComponent(title)}&type=movie&apikey=${OMDB_API_KEY}&plot=short`);
+    const data = await response.json();
+    if (data.Response === "True") {
+      return { imdbId: data.imdbID, title: data.Title, poster: data.Poster !== 'N/A' ? data.Poster : '', plot: data.Plot };
+    }
+    throw new Error('Filme não encontrado na API pelo título.');
+  } catch (error) {
+    console.error("Erro ao obter dados por título:", error);
     throw error;
   }
 };
@@ -79,22 +97,48 @@ export default function App() {
   const [targetUserId, setTargetUserId] = useState(''); 
   const [friendSearchText, setFriendSearchText] = useState('');
   
+  // Controle das Sanfonas (Accordions)
+  const [expandedSection, setExpandedSection] = useState('ai'); // Inicializa com a IA aberta
+
+  // Estados de Input Manual
   const [imdbLink, setImdbLink] = useState('');
   const [movieStatus, setMovieStatus] = useState('Quero assistir'); 
   const [activeFilter, setActiveFilter] = useState('Todos');
+  const [sortBy, setSortBy] = useState('recentes');
   
+  // Estados da Pesquisa com IA
+  const [aiQuery, setAiQuery] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState([]);
+  const [aiErrorMsg, setAiErrorMsg] = useState('');
+
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [dbError, setDbError] = useState(''); 
 
-  // Função de navegação com auto-scroll para o topo (Resolve o ecrã em branco)
   const navigateTo = (newView) => {
     setView(newView);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Inicialização e Auth
+  const toggleSection = (section) => {
+    setExpandedSection(prev => prev === section ? null : section);
+  };
+
+  // --- Efeito para injetar o Ícone da Aba (Favicon) ---
+  useEffect(() => {
+    const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/></svg>`;
+    let link = document.querySelector("link[rel~='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.type = 'image/svg+xml';
+    link.href = `data:image/svg+xml,${svgIcon}`;
+  }, []);
+
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -107,7 +151,6 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      
       const params = new URLSearchParams(window.location.search);
       const sharedUserId = params.get('user');
       
@@ -120,48 +163,37 @@ export default function App() {
         setView('landing');
       }
     });
-
     return () => unsubscribe();
   }, []);
 
-  // Busca de Filmes Públicos
   useEffect(() => {
     if (!user) return;
     const moviesRef = collection(db, 'artifacts', appId, 'public', 'data', 'recommendations');
-    
     const unsubscribe = onSnapshot(moviesRef, (snapshot) => {
       const allMovies = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       allMovies.sort((a, b) => b.createdAt - a.createdAt);
       setMovies(allMovies);
       setDbError(''); 
     }, (error) => {
-      console.error("Erro ao procurar filmes:", error);
-      setDbError(`Erro de ligação à base de dados (${error.code}). Verifique as regras do Firestore!`);
+      setDbError(`Erro de ligação à base de dados (${error.code}).`);
     });
-
     return () => unsubscribe();
   }, [user]);
 
-  // Busca de Listas Guardadas (Dado Privado)
   useEffect(() => {
     if (!user || user.isAnonymous) {
       setSavedLists([]);
       return;
     }
-    
     const savedListsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'savedLists');
     const unsubscribe = onSnapshot(savedListsRef, (snapshot) => {
       const lists = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       lists.sort((a, b) => b.createdAt - a.createdAt);
       setSavedLists(lists);
-    }, (error) => {
-      console.error("Erro ao buscar listas guardadas:", error);
     });
-
     return () => unsubscribe();
   }, [user]);
 
-  // Filtros
   const displayedMovies = useMemo(() => {
     let list = [];
     if (view === 'publicList' && targetUserId) {
@@ -173,14 +205,28 @@ export default function App() {
     } else {
       return []; 
     }
-
+    
     if (activeFilter !== 'Todos') {
       list = list.filter(m => (m.status || 'Quero assistir') === activeFilter);
     }
+    
+    if (sortBy === 'recentes') {
+      list.sort((a, b) => b.createdAt - a.createdAt);
+    } else if (sortBy === 'antigos') {
+      list.sort((a, b) => a.createdAt - b.createdAt);
+    } else if (sortBy === 'nota') {
+      list.sort((a, b) => {
+        const getRating = (movie) => {
+          if (!movie.ratings) return 0;
+          const vals = Object.values(movie.ratings);
+          return vals.length ? vals.reduce((sum, v) => sum + v, 0) / vals.length : 0;
+        };
+        return getRating(b) - getRating(a);
+      });
+    }
     return list;
-  }, [movies, view, targetUserId, user, activeFilter]);
+  }, [movies, view, targetUserId, user, activeFilter, sortBy]);
 
-  // HANDLERS DE AUTH
   const handleGoogleLogin = async () => {
     setErrorMsg('');
     const provider = new GoogleAuthProvider();
@@ -192,7 +238,7 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
-      setErrorMsg('Erro ao iniciar sessão. Verifique se ativou o Google no painel do Firebase.');
+      setErrorMsg('Erro ao iniciar sessão. Verifique o Google no painel do Firebase.');
     }
   };
 
@@ -205,36 +251,103 @@ export default function App() {
     window.history.pushState({}, document.title, window.location.pathname);
   };
 
-  // HANDLERS DE FILMES
+  // --- FUNÇÃO DE PESQUISA COM GEMINI (Melhorada para títulos originais) ---
+  const handleAiSearch = async (e) => {
+    e.preventDefault();
+    if (!aiQuery.trim()) return;
+    
+    setIsAiLoading(true);
+    setAiErrorMsg('');
+    setAiSuggestions([]);
+    
+    try {
+      if (!GEMINI_API_KEY || GEMINI_API_KEY === 'SUA_CHAVE_GEMINI') {
+         throw new Error("Chave do Gemini não encontrada no ficheiro .env local.");
+      }
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      const payload = {
+        contents: [{ parts: [{ text: `Aja como um especialista em cinema. Sugira exatamente 5 filmes de alta qualidade (não indique séries, desenhos animados longos ou podcasts) que se encaixem perfeitamente neste tema: "${aiQuery}". Retorne APENAS um JSON com uma lista de objetos contendo o titulo do filme no idioma original de cada filme.` }] }],
+        generationConfig: { 
+          responseMimeType: "application/json", 
+          responseSchema: { 
+            type: "ARRAY", 
+            items: { 
+              type: "OBJECT", 
+              properties: { originalTitle: { type: "STRING", description: "O título oficial do filme no seu idioma original (ex: City of God)." } },
+              required: ["originalTitle"]
+            } 
+          } 
+        }
+      };
+      
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData?.error?.message || `Falha na requisição (Status ${res.status})`);
+      }
+      
+      const data = await res.json();
+      const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (!textResponse) throw new Error('A IA não retornou resultados válidos.');
+      
+      const parsedTitles = JSON.parse(textResponse);
+      
+      const suggestions = [];
+      for (const item of parsedTitles) {
+        if (item.originalTitle) {
+          try {
+            const movieData = await fetchMovieInfoByTitle(item.originalTitle);
+            suggestions.push(movieData);
+          } catch (omdbErr) {
+            console.warn(`Filme "${item.originalTitle}" não encontrado no OMDb.`);
+          }
+        }
+      }
+      
+      if (suggestions.length === 0) {
+        setAiErrorMsg("Não foi possível carregar as capas dos filmes sugeridos no momento.");
+      } else {
+        setAiSuggestions(suggestions);
+      }
+      
+    } catch (err) {
+      console.error("Erro da IA:", err);
+      setAiErrorMsg(`Aviso da IA: ${err.message}`);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   const handleAddMovie = async (e) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
-    
     if (!user || user.isAnonymous) return;
 
     const imdbRegex = /imdb\.com(?:\/[a-zA-Z-]+)?\/title\/(tt\d+)/i;
     const match = imdbLink.match(imdbRegex);
     
     if (!match || !match[1]) {
-      setErrorMsg('Ligação inválida. Cole um URL do IMDb válido.');
+      setErrorMsg('Ligação inválida. Utilize um link do IMDb.');
       return;
     }
-
     const imdbId = match[1];
     if (movies.some(m => m.ownerId === user.uid && m.imdbId === imdbId)) {
-      setErrorMsg('Você já indicou este filme!');
+      setErrorMsg('Este filme já faz parte da sua lista!');
       return;
     }
 
     setIsLoading(true);
     try {
-      const movieData = await fetchMovieInfo(imdbId);
+      const movieData = await fetchMovieInfoById(imdbId);
       const moviesRef = collection(db, 'artifacts', appId, 'public', 'data', 'recommendations');
       await addDoc(moviesRef, {
         ownerId: user.uid,
         ownerEmail: user.email,
-        imdbId: imdbId,
+        imdbId: movieData.imdbId,
         title: movieData.title,
         poster: movieData.poster,
         plot: movieData.plot,
@@ -242,29 +355,22 @@ export default function App() {
         ratings: {},
         createdAt: Date.now()
       });
-      
-      setSuccessMsg('Filme adicionado com sucesso!');
+      setSuccessMsg('Filme adicionado!');
       setImdbLink('');
-      setMovieStatus('Quero assistir'); 
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err) {
-      setErrorMsg('Erro ao obter dados do filme. Verifique a ligação e a sua chave da OMDb API.');
+      setErrorMsg('Erro ao obter dados do filme.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSaveToMyList = async (movie) => {
-    if (!user || user.isAnonymous) {
-      alert("Precisa de iniciar sessão para adicionar filmes à sua lista.");
-      return;
-    }
-
+  const handleSaveToMyList = async (movie, defaultStatus = 'Quero assistir') => {
+    if (!user || user.isAnonymous) return;
     if (movies.some(m => m.ownerId === user.uid && m.imdbId === movie.imdbId)) {
       alert("Este filme já está na sua lista!");
       return;
     }
-
     try {
       const moviesRef = collection(db, 'artifacts', appId, 'public', 'data', 'recommendations');
       await addDoc(moviesRef, {
@@ -274,19 +380,18 @@ export default function App() {
         title: movie.title,
         poster: movie.poster,
         plot: movie.plot,
-        status: 'Quero assistir', 
+        status: defaultStatus, 
         ratings: {},
         createdAt: Date.now()
       });
-      alert("Filme adicionado à sua lista com sucesso!");
+      alert(`"${movie.title}" adicionado à sua lista!`);
     } catch (err) {
-      console.error("Erro ao guardar o filme:", err);
-      alert("Erro ao adicionar filme à sua lista.");
+      alert("Erro ao adicionar filme.");
     }
   };
 
   const handleDeleteMovie = async (movieId) => {
-    if (confirm('Deseja realmente remover este filme da sua lista?')) {
+    if (confirm('Remover este filme da lista?')) {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'recommendations', movieId));
     }
   };
@@ -296,8 +401,7 @@ export default function App() {
     try {
       await updateDoc(movieRef, { status: newStatus });
     } catch (err) {
-      console.error("Erro ao atualizar estado:", err);
-      alert("Erro ao guardar o novo estado.");
+      alert("Erro ao atualizar estado.");
     }
   };
 
@@ -305,32 +409,22 @@ export default function App() {
     if (!user) return;
     const movieRef = doc(db, 'artifacts', appId, 'public', 'data', 'recommendations', movieId);
     try {
-      await updateDoc(movieRef, {
-        [`ratings.${user.uid}`]: ratingValue
-      });
+      await updateDoc(movieRef, { [`ratings.${user.uid}`]: ratingValue });
     } catch (err) {
-      console.error("Erro ao votar:", err);
-      alert("Erro ao registar o voto. Verifique as regras do Firestore.");
+      alert("Erro ao votar.");
     }
   };
 
-  // HANDLERS DE LISTAS GUARDADAS
   const handleSaveFriendList = async () => {
     if (!user || user.isAnonymous) return;
-    const listName = prompt("Dê um nome para esta lista (ex: Filmes do João):");
+    const listName = prompt("Dê um nome para esta lista:");
     if (!listName || listName.trim() === '') return;
-
     try {
       const savedListsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'savedLists');
-      await addDoc(savedListsRef, {
-        friendId: targetUserId,
-        name: listName.trim(),
-        createdAt: Date.now()
-      });
-      alert("Lista acompanhada com sucesso!");
+      await addDoc(savedListsRef, { friendId: targetUserId, name: listName.trim(), createdAt: Date.now() });
+      alert("Lista guardada!");
     } catch (err) {
-      console.error("Erro ao salvar lista:", err);
-      alert("Erro ao guardar a lista.");
+      alert("Erro ao guardar lista.");
     }
   };
 
@@ -338,28 +432,20 @@ export default function App() {
     if (confirm('Deixar de acompanhar esta lista?')) {
       try {
         await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'savedLists', listId));
-      } catch (err) {
-        console.error("Erro ao remover lista guardada:", err);
-      }
+      } catch (err) {}
     }
   };
 
-  // CÓPIAS
   const copyShareLink = () => {
     if (!user) return;
     const baseUrl = window.location.origin + window.location.pathname;
     const shareUrl = `${baseUrl}?user=${user.uid}`;
-    
     const textArea = document.createElement("textarea");
     textArea.value = shareUrl;
     document.body.appendChild(textArea);
     textArea.select();
-    try {
-      document.execCommand('copy');
-      alert(`Ligação copiada! Envie aos seus amigos:\n\n${shareUrl}`);
-    } catch (err) {
-      alert('A sua ligação é: ' + shareUrl);
-    }
+    document.execCommand('copy');
+    alert(`Link copiado: ${shareUrl}`);
     document.body.removeChild(textArea);
   };
 
@@ -369,12 +455,8 @@ export default function App() {
     textArea.value = user.uid;
     document.body.appendChild(textArea);
     textArea.select();
-    try {
-      document.execCommand('copy');
-      alert('O seu Código ID foi copiado com sucesso!');
-    } catch (err) {
-      alert('Erro ao copiar.');
-    }
+    document.execCommand('copy');
+    alert('Código ID copiado!');
     document.body.removeChild(textArea);
   };
 
@@ -400,7 +482,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-900 text-gray-100 font-sans">
-      <header className="bg-gray-800 border-b border-gray-700 shadow-lg sticky top-0 z-10">
+      <header className="bg-gray-800 border-b border-gray-700 shadow-lg sticky top-0 z-20">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
           <div 
             className="flex items-center space-x-2 cursor-pointer"
@@ -418,7 +500,7 @@ export default function App() {
           <div className="flex items-center space-x-4">
             {!isGuest ? (
               <div className="flex items-center space-x-4">
-                <span className="text-sm text-gray-400 hidden sm:inline">{user?.email}</span>
+                <span className="text-xs text-gray-400 hidden sm:inline truncate max-w-[150px]">{user?.email}</span>
                 <button 
                   onClick={handleLogout}
                   className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition"
@@ -441,27 +523,25 @@ export default function App() {
       </header>
 
       <main className="flex-grow w-full flex flex-col">
-        
         {dbError && (
-          <div className="max-w-5xl mx-auto w-full px-4 mt-8 mb-2">
-            <div className="bg-red-900/40 border border-red-500 text-red-200 p-4 rounded-xl flex items-center shadow-lg">
+          <div className="max-w-5xl mx-auto w-full px-4 mt-8">
+            <div className="bg-red-900/40 border border-red-500 text-red-200 p-4 rounded-xl flex items-center">
                <AlertCircle className="mr-3 flex-shrink-0" size={24} />
-               <p>{dbError}</p>
+               <p className="text-sm">{dbError}</p>
             </div>
           </div>
         )}
 
-        {/* --- LANDING PAGE (Visão rica em conteúdo para Visitantes e Google AdSense) --- */}
+        {/* --- LANDING PAGE --- */}
         {view === 'landing' && (
-          <div className="flex flex-col w-full">
-            {/* Hero Section */}
+          <div className="flex flex-col w-full animate-in fade-in duration-500">
             <div className="bg-gray-800 border-b border-gray-700 py-16 md:py-24 px-4 text-center">
               <div className="max-w-3xl mx-auto">
                 <h2 className="text-4xl md:text-5xl font-extrabold text-white mb-6 leading-tight">
                   A sua estante virtual de <span className="text-red-500">Filmes</span>
                 </h2>
                 <p className="text-lg md:text-xl text-gray-400 mb-10 leading-relaxed">
-                  Descubra novos filmes, crie a sua lista de favoritos, marque o que já assistiu e partilhe as suas recomendações com amigos de forma fácil e rápida. Tudo num só lugar.
+                  Descubra novos filmes através da Inteligência Artificial, organize as suas visualizações e partilhe as suas recomendações.
                 </p>
                 <button 
                   onClick={handleGoogleLogin} 
@@ -473,271 +553,250 @@ export default function App() {
                 {errorMsg && <p className="text-red-400 mt-4 text-sm">{errorMsg}</p>}
               </div>
             </div>
-
-            {/* Features Section */}
+            
             <div className="max-w-5xl mx-auto px-4 py-16">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 text-center shadow-lg">
-                  <div className="bg-gray-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-                    <ListVideo className="text-red-500" size={32} />
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                {[
+                  { icon: <ListVideo className="text-red-500" />, title: "Organize Tudo", desc: "Marque o que quer assistir e guarde os seus favoritos." },
+                  { icon: <Share2 className="text-red-500" />, title: "Partilhe", desc: "Gere links únicos e envie as suas recomendações a amigos." },
+                  { icon: <Globe className="text-red-500" />, title: "Acompanhe", desc: "Siga o que os seus amigos estão a ver em tempo real." },
+                  { icon: <Sparkles className="text-yellow-400" />, title: "Sugestões IA", desc: "Peça sugestões à nossa IA sobre qualquer tema ou gênero." }
+                ].map((item, idx) => (
+                  <div key={idx} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 text-center shadow-lg hover:border-gray-500 transition">
+                    <div className="bg-gray-900 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4">
+                      {item.icon}
+                    </div>
+                    <h3 className="text-lg font-bold text-white mb-2">{item.title}</h3>
+                    <p className="text-gray-400 text-xs leading-relaxed">{item.desc}</p>
                   </div>
-                  <h3 className="text-xl font-bold text-white mb-4">Organize Tudo</h3>
-                  <p className="text-gray-400 text-sm leading-relaxed">
-                    Mantenha um registo perfeito separando os filmes entre "Quero Assistir", "Já Assistidos" e "Favoritos". Nunca mais se esqueça daquele filme que lhe recomendaram numa conversa.
-                  </p>
-                </div>
-                <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 text-center shadow-lg">
-                  <div className="bg-gray-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-                    <Share2 className="text-red-500" size={32} />
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-4">Partilhe com Amigos</h3>
-                  <p className="text-gray-400 text-sm leading-relaxed">
-                    Gere uma ligação única para o seu perfil e envie aos seus amigos. Eles poderão ver a sua lista completa e dar notas aos filmes que você recomendou com base nas experiências deles.
-                  </p>
-                </div>
-                <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 text-center shadow-lg">
-                  <div className="bg-gray-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-                    <Globe className="text-red-500" size={32} />
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-4">Acompanhe Outros</h3>
-                  <p className="text-gray-400 text-sm leading-relaxed">
-                    Siga o perfil dos seus amigos, veja o que eles estão a assistir e guarde as listas deles no seu painel para acesso rápido sempre que precisar de inspiração para a sua próxima sessão de cinema.
-                  </p>
-                </div>
+                ))}
               </div>
             </div>
 
-            {/* SEÇÃO DE TEXTO MASSIVO PARA O ADSENSE (FAQ e Sobre) */}
             <div className="bg-gray-800 border-t border-gray-700 py-16">
               <div className="max-w-4xl mx-auto px-4">
                 <div className="mb-12">
-                  <h3 className="text-2xl font-bold text-white flex items-center mb-4">
-                    <Info className="mr-3 text-red-500" size={28} />
-                    Sobre o Cine Indica
-                  </h3>
-                  <div className="text-gray-400 space-y-4 text-base leading-relaxed">
-                    <p>
-                      O Cine Indica nasceu da paixão pelo cinema e da necessidade de ter um espaço simples e organizado para guardar os títulos que não queremos esquecer. Quantas vezes alguém lhe recomendou um filme excelente, mas no momento de escolher o que assistir em casa, o nome desapareceu da sua memória? A nossa plataforma resolve exatamente esse problema.
-                    </p>
-                    <p>
-                      Funcionando como uma estante virtual ou um diário de visualização, oferecemos uma interface limpa, focada no conteúdo visual das capas dos filmes e sinopses diretas. A integração com bases de dados mundiais garante que qualquer título, desde os maiores sucessos de bilheteira de Hollywood até aos clássicos do cinema independente, possa ser encontrado e adicionado à sua coleção pessoal com apenas alguns cliques.
-                    </p>
-                  </div>
+                  <h3 className="text-2xl font-bold text-white flex items-center mb-4"><Info className="mr-3 text-red-500" /> Sobre o Cine Indica</h3>
+                  <p className="text-gray-400 text-sm leading-relaxed">
+                    O Cine Indica nasceu da paixão pelo cinema e da necessidade de ter um espaço simples para guardar os títulos que não queremos esquecer. 
+                    Utilizamos bases de dados mundiais para garantir que encontra qualquer filme com facilidade.
+                  </p>
                 </div>
-
                 <div>
-                  <h3 className="text-2xl font-bold text-white flex items-center mb-6">
-                    <HelpCircle className="mr-3 text-red-500" size={28} />
-                    Perguntas Frequentes (FAQ)
-                  </h3>
-                  <div className="space-y-6">
-                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-700">
-                      <h4 className="font-bold text-white mb-2">1. O serviço é totalmente gratuito?</h4>
-                      <p className="text-gray-400 text-sm leading-relaxed">Sim! A criação da conta, a adição de filmes ilimitados e a partilha de listas são funcionalidades 100% gratuitas para todos os utilizadores.</p>
+                  <h3 className="text-2xl font-bold text-white flex items-center mb-6"><HelpCircle className="mr-3 text-red-500" /> Perguntas Frequentes</h3>
+                  <div className="space-y-4">
+                    <div className="bg-gray-900 p-4 rounded-xl border border-gray-700">
+                      <h4 className="font-bold text-sm text-white mb-1">O serviço é gratuito?</h4>
+                      <p className="text-gray-400 text-xs">Sim, todas as funcionalidades de criação de lista e IA são 100% gratuitas.</p>
                     </div>
-                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-700">
-                      <h4 className="font-bold text-white mb-2">2. Como funciona o sistema de "Status"?</h4>
-                      <p className="text-gray-400 text-sm leading-relaxed">Cada filme que adiciona pode ser categorizado através de etiquetas. Pode marcá-lo como "Quero assistir" para a sua lista de pendências, "Assistido" para o seu histórico, ou "Favorito" para aquelas obras-primas que recomenda a todos.</p>
-                    </div>
-                    <div className="bg-gray-900 p-6 rounded-xl border border-gray-700">
-                      <h4 className="font-bold text-white mb-2">3. Os meus amigos precisam de ter conta para ver a minha lista?</h4>
-                      <p className="text-gray-400 text-sm leading-relaxed">Não necessariamente. Qualquer pessoa com o seu link público pode visualizar os filmes que adicionou. No entanto, se eles quiserem votar nas estrelas ou copiar um filme da sua lista para a deles, será necessário fazer um login rápido através do Google.</p>
+                    <div className="bg-gray-900 p-4 rounded-xl border border-gray-700">
+                      <h4 className="font-bold text-sm text-white mb-1">Como partilhar?</h4>
+                      <p className="text-gray-400 text-xs">Após o login, basta clicar em "Copiar Link da Lista" no seu painel principal.</p>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Public Feed Section */}
             <div className="max-w-5xl mx-auto px-4 py-16 w-full">
-              <div className="flex items-center justify-between mb-8">
-                <h3 className="text-2xl font-bold text-white flex items-center">
-                  <Heart className="mr-3 text-red-500" size={28} />
-                  Últimas Indicações da Comunidade
-                </h3>
-              </div>
-              
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6">
-                {displayedMovies.length === 0 ? (
-                  <div className="col-span-full py-10 text-center text-gray-500">A carregar filmes ou comunidade vazia...</div>
-                ) : (
-                  displayedMovies.map((movie) => {
-                    const avgRating = calculateAverageRating(movie.ratings);
-                    return (
-                      <div key={movie.id} className="bg-gray-800 rounded-xl overflow-hidden shadow-lg border border-gray-700 flex flex-col relative opacity-90 hover:opacity-100 transition">
-                        <div className="relative aspect-[2/3] w-full bg-gray-900 overflow-hidden">
-                          <img 
-                            src={movie.poster} alt={movie.title}
-                            className="w-full h-full object-cover"
-                          />
-                          <div className="absolute top-0 right-0 bg-black/80 backdrop-blur-sm text-white px-2 py-1 m-2 rounded-md flex items-center text-xs font-bold shadow-md">
-                            <Star size={12} className="text-yellow-400 fill-yellow-400 mr-1" />
-                            {avgRating}
-                          </div>
-                        </div>
-                        <div className="p-3 flex-grow flex flex-col">
-                          <h3 className="text-sm font-bold text-white mb-1 line-clamp-2 leading-snug">{movie.title}</h3>
-                          <div className="mt-auto pt-2 border-t border-gray-700/50">
-                            <span className="text-[10px] text-gray-500 uppercase">Adicionado recentemente</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
+              <h3 className="text-2xl font-bold text-white flex items-center mb-8"><Heart className="mr-3 text-red-500" /> Indicações da Comunidade</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {movies.slice(0, 10).map((movie) => (
+                  <div key={movie.id} className="bg-gray-800 rounded-xl overflow-hidden shadow-lg border border-gray-700 flex flex-col group">
+                    <div className="relative aspect-[2/3] w-full bg-gray-900">
+                      <img src={movie.poster} alt={movie.title} className="w-full h-full object-cover group-hover:scale-105 transition" />
+                    </div>
+                    <div className="p-3">
+                      <h3 className="text-xs font-bold text-white truncate">{movie.title}</h3>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         )}
 
-        {/* ECRÃ DE PRIVACIDADE E TERMOS */}
+        {/* ECRÃS DE PRIVACIDADE E TERMOS (Restaurados) */}
         {view === 'privacy' && (
-          <div className="max-w-3xl mx-auto w-full px-4 py-8">
+          <div className="max-w-3xl mx-auto w-full px-4 py-8 animate-in slide-in-from-bottom-4 duration-300">
             <div className="bg-gray-800 p-8 rounded-2xl shadow-xl border border-gray-700">
                <h2 className="text-2xl font-bold mb-6 flex items-center"><Shield className="mr-3 text-red-500" /> Política de Privacidade</h2>
                <div className="space-y-4 text-gray-300 text-sm leading-relaxed">
-                  <p>A sua privacidade é importante para nós. Esta Política de Privacidade explica como o Cine Indica recolhe, utiliza e protege as suas informações.</p>
+                  <p>A sua privacidade é fundamental. Esta política explica como gerimos os seus dados.</p>
                   <h3 className="text-lg font-bold text-white mt-6">1. Recolha de Dados</h3>
-                  <p>Recolhemos o seu endereço de e-mail e informações básicas de perfil quando inicia sessão com o Google. Estas informações são utilizadas exclusivamente para criar a sua conta, permitir a partilha das suas listas e associar as suas avaliações aos filmes.</p>
-                  <h3 className="text-lg font-bold text-white mt-6">2. Cookies e Publicidade de Terceiros</h3>
-                  <p>O nosso site utiliza cookies para manter a sua sessão ativa. Adicionalmente, permitimos que empresas de terceiros (como o Google AdSense/AdMob) apresentem anúncios quando visita o nosso site. Estas empresas podem utilizar informações não pessoais (como o tipo de navegador, hora e data, tema dos anúncios clicados) durante as suas visitas a este e outros sites, de forma a apresentar anúncios de bens e serviços que possam ser do seu interesse (cookies DART ou similares).</p>
-                  <h3 className="text-lg font-bold text-white mt-6">3. Segurança dos Dados</h3>
-                  <p>Todos os dados são armazenados de forma segura utilizando a infraestrutura da Google Cloud (Firebase). As suas listas privadas (como os amigos que acompanha) não são visíveis publicamente.</p>
-                  <button onClick={() => navigateTo(isGuest ? 'landing' : 'dashboard')} className="mt-8 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold transition">Voltar</button>
+                  <p>Recolhemos o seu e-mail e nome básico via Google Login para gerir a sua conta e associar as suas listas de filmes.</p>
+                  <h3 className="text-lg font-bold text-white mt-6">2. Publicidade e Cookies</h3>
+                  <p>Utilizamos cookies de sessão. Podemos permitir anúncios de terceiros (Google AdSense) que podem utilizar dados não sensíveis para exibir anúncios relevantes.</p>
+                  <h3 className="text-lg font-bold text-white mt-6">3. Segurança</h3>
+                  <p>Os seus dados são encriptados e guardados nos servidores seguros da Google Cloud (Firebase).</p>
+                  <button onClick={() => navigateTo(isGuest ? 'landing' : 'dashboard')} className="mt-8 px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold transition">Voltar</button>
                </div>
             </div>
           </div>
         )}
-
+        
         {view === 'terms' && (
-          <div className="max-w-3xl mx-auto w-full px-4 py-8">
+          <div className="max-w-3xl mx-auto w-full px-4 py-8 animate-in slide-in-from-bottom-4 duration-300">
             <div className="bg-gray-800 p-8 rounded-2xl shadow-xl border border-gray-700">
                <h2 className="text-2xl font-bold mb-6 flex items-center"><FileText className="mr-3 text-red-500" /> Termos de Uso</h2>
                <div className="space-y-4 text-gray-300 text-sm leading-relaxed">
-                  <p>Ao utilizar o Cine Indica, concorda com os seguintes termos:</p>
-                  <h3 className="text-lg font-bold text-white mt-6">1. Uso Aceitável</h3>
-                  <p>O Cine Indica é uma plataforma para organizar e partilhar indicações de filmes. Compromete-se a não utilizar a plataforma para fins ilícitos, envio de spam ou qualquer atividade que comprometa a infraestrutura do site.</p>
-                  <h3 className="text-lg font-bold text-white mt-6">2. Conteúdo Gerado pelo Utilizador</h3>
-                  <p>As listas, filmes adicionados e notas dadas são da responsabilidade do utilizador. Reservamo-nos o direito de remover conteúdos ou banir contas que partilhem links maliciosos ou violem as políticas do serviço.</p>
-                  <h3 className="text-lg font-bold text-white mt-6">3. Limitação de Responsabilidade</h3>
-                  <p>Os dados dos filmes são fornecidos através de APIs públicas (OMDb). Não garantimos a exatidão, disponibilidade contínua ou atualizações instantâneas das sinopses e capas exibidas.</p>
-                  <button onClick={() => navigateTo(isGuest ? 'landing' : 'dashboard')} className="mt-8 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold transition">Voltar</button>
+                  <p>Ao utilizar o Cine Indica, concorda com:</p>
+                  <h3 className="text-lg font-bold text-white mt-6">1. Uso Pessoal</h3>
+                  <p>O site é destinado ao uso pessoal e organização de conteúdos cinematográficos.</p>
+                  <h3 className="text-lg font-bold text-white mt-6">2. Responsabilidade do Conteúdo</h3>
+                  <p>As listas criadas são da responsabilidade do utilizador. Não nos responsabilizamos por links externos ou opiniões expressas.</p>
+                  <h3 className="text-lg font-bold text-white mt-6">3. API de Terceiros</h3>
+                  <p>Dependemos das APIs do OMDb e Gemini. Não garantimos a disponibilidade constante destes serviços externos.</p>
+                  <button onClick={() => navigateTo(isGuest ? 'landing' : 'dashboard')} className="mt-8 px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold transition">Voltar</button>
                </div>
             </div>
           </div>
         )}
 
-        {/* PAINEL PRIVADO (Dashboard) */}
+        {/* --- PAINEL PRIVADO (Dashboard com Sanfonas) --- */}
         {!isGuest && view === 'dashboard' && (
-          <div className="max-w-5xl mx-auto w-full px-4 py-8 space-y-8">
+          <div className="max-w-5xl mx-auto w-full px-4 py-8 space-y-6">
+            
+            {/* Header Dashboard */}
             <div className="bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div>
-                <h2 className="text-2xl font-bold mb-1">As suas Indicações</h2>
-                <p className="text-gray-400 text-sm mb-4">Adicione filmes, organize e partilhe a sua lista.</p>
-                
-                <div className="flex items-center bg-gray-900 px-3 py-2 rounded-lg border border-gray-700 w-fit">
-                   <span className="text-xs text-gray-500 mr-2">O seu Código:</span>
-                   <code className="text-sm text-red-400 font-mono select-all">{user?.uid}</code>
-                   <button 
-                     onClick={copyMyId} 
-                     className="ml-3 text-gray-400 hover:text-white transition" 
-                     title="Copiar Código"
-                   >
-                     <Copy size={16} />
-                   </button>
+                <h2 className="text-2xl font-bold mb-1">Painel de Indicações</h2>
+                <div className="flex items-center bg-gray-900 px-3 py-1.5 rounded-lg border border-gray-700 w-fit mt-2">
+                   <span className="text-[10px] text-gray-500 mr-2 uppercase tracking-wider">O meu ID:</span>
+                   <code className="text-xs text-red-400 font-mono select-all truncate max-w-[120px]">{user?.uid}</code>
+                   <button onClick={copyMyId} className="ml-2 text-gray-400 hover:text-white transition"><Copy size={14} /></button>
                 </div>
               </div>
-              <button 
-                onClick={copyShareLink}
-                className="flex items-center px-5 py-3 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold transition shadow-lg whitespace-nowrap"
-              >
-                <Share2 size={18} className="mr-2" />
-                Copiar Link da Lista
+              <button onClick={copyShareLink} className="flex items-center px-6 py-3 bg-green-600 hover:bg-green-700 rounded-xl text-white font-bold shadow-lg w-full md:w-auto justify-center transition active:scale-95">
+                <Share2 size={18} className="mr-2" /> Partilhar Lista
               </button>
             </div>
 
-            <form onSubmit={handleAddMovie} className="bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700">
-              <label className="block text-sm font-medium text-gray-300 mb-2">Cole o link do IMDb do filme:</label>
-              <div className="flex flex-col md:flex-row gap-3">
-                <div className="relative flex-grow">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Search size={18} className="text-gray-500" />
+            {/* --- ÁREA DE FERRAMENTAS (SANFONAS) --- */}
+            <div className="grid grid-cols-1 gap-4">
+              
+              {/* IA SECTION */}
+              <div className="bg-gradient-to-br from-indigo-900/40 to-gray-800 rounded-2xl border border-indigo-500/30 overflow-hidden shadow-lg transition-all duration-300">
+                <button onClick={() => toggleSection('ai')} className="w-full p-5 flex justify-between items-center text-left hover:bg-white/5 transition-colors">
+                  <div className="flex items-center">
+                    <Sparkles className="mr-3 text-yellow-400" size={22} />
+                    <h3 className="text-lg font-bold text-white">Descobrir por Tema (IA)</h3>
                   </div>
-                  <input
-                    type="url" value={imdbLink} onChange={(e) => setImdbLink(e.target.value)} required
-                    placeholder="https://www.imdb.com/title/tt0133093/"
-                    className="w-full bg-gray-900 border border-gray-600 rounded-lg pl-10 pr-4 py-3 text-white focus:ring-1 focus:ring-red-500"
-                  />
-                </div>
-                
-                <select 
-                  value={movieStatus} 
-                  onChange={(e) => setMovieStatus(e.target.value)}
-                  className="bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-1 focus:ring-red-500 outline-none"
-                >
-                  <option value="Quero assistir">🍿 Quero assistir</option>
-                  <option value="Assistido">✅ Assistido</option>
-                  <option value="Favorito">⭐ Favorito</option>
-                </select>
-
-                <button type="submit" disabled={isLoading} className="flex items-center justify-center px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg font-bold shadow-md">
-                  {isLoading ? 'A procurar...' : <><Plus size={20} className="mr-2"/> Adicionar</>}
+                  <ChevronDown className={`text-gray-400 transition-transform duration-300 ${expandedSection === 'ai' ? 'rotate-180' : ''}`} />
                 </button>
-              </div>
-              {successMsg && <p className="text-green-400 text-sm mt-3 flex items-center"><Check size={14} className="mr-1"/> {successMsg}</p>}
-              {errorMsg && <p className="text-red-400 text-sm mt-3 flex items-center"><AlertCircle size={14} className="mr-1"/> {errorMsg}</p>}
-            </form>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-gray-800/50 rounded-2xl p-6 border border-gray-700">
-                 <h3 className="text-md font-bold text-gray-300 mb-3">Pesquisar lista de um amigo</h3>
-                 <div className="flex gap-2">
-                   <input 
-                     type="text" placeholder="Cole o ID do amigo aqui..."
-                     value={friendSearchText} onChange={e => setFriendSearchText(e.target.value)}
-                     className="flex-grow bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500 w-full"
-                   />
-                   <button 
-                     onClick={() => { 
-                       if(friendSearchText) { 
-                         setTargetUserId(friendSearchText.trim()); 
-                         navigateTo('publicList'); 
-                         setActiveFilter('Todos');
-                       } 
-                     }}
-                     className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap"
-                   >
-                     Procurar
-                   </button>
-                 </div>
-              </div>
-
-              {savedLists.length > 0 && (
-                <div className="bg-gray-800/50 rounded-2xl p-6 border border-gray-700 flex flex-col h-full max-h-[250px] overflow-y-auto scrollbar-hide">
-                   <h3 className="text-md font-bold text-gray-300 mb-3 flex items-center">
-                     <Bookmark className="mr-2 text-red-400" size={18}/> Listas Acompanhadas
-                   </h3>
-                   <div className="flex flex-col gap-2">
-                     {savedLists.map(list => (
-                       <div key={list.id} className="bg-gray-900 border border-gray-700 rounded-lg p-3 flex items-center justify-between">
-                          <div 
-                            className="cursor-pointer flex-grow overflow-hidden" 
-                            onClick={() => { setTargetUserId(list.friendId); navigateTo('publicList'); setActiveFilter('Todos'); }}
-                          >
-                             <p className="font-bold text-sm text-gray-200 truncate hover:text-red-400 transition">{list.name}</p>
-                          </div>
-                          <button 
-                            onClick={() => handleRemoveSavedList(list.id)} 
-                            className="text-gray-500 hover:text-red-500 ml-3 p-1 transition"
-                            title="Deixar de acompanhar"
-                          >
-                             <Trash2 size={16} />
-                          </button>
-                       </div>
-                     ))}
-                   </div>
+                <div className={`transition-all duration-300 ease-in-out ${expandedSection === 'ai' ? 'max-h-[1200px] opacity-100 p-5 pt-0' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                  <div className="pt-4 border-t border-indigo-500/20">
+                    <form onSubmit={handleAiSearch} className="flex flex-col sm:flex-row gap-3">
+                      <input
+                        type="text" value={aiQuery} onChange={(e) => setAiQuery(e.target.value)} required
+                        placeholder="Ex: filmes brasileiros indicados ao oscar..."
+                        className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3 text-white focus:ring-1 focus:ring-indigo-500 outline-none text-sm"
+                      />
+                      <button type="submit" disabled={isAiLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-6 py-3 rounded-xl font-bold text-white transition flex items-center justify-center">
+                        {isAiLoading ? <span className="animate-pulse">A consultar...</span> : <Search size={18} />}
+                      </button>
+                    </form>
+                    {aiErrorMsg && <p className="text-red-400 text-[10px] mt-2 flex items-center"><AlertCircle size={12} className="mr-1"/> {aiErrorMsg}</p>}
+                    
+                    {aiSuggestions.length > 0 && (
+                      <div className="mt-6">
+                        <h4 className="text-xs font-bold text-indigo-300 uppercase mb-4 tracking-widest">Sugestões Encontradas</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                          {aiSuggestions.map((movie, idx) => (
+                            <div key={idx} className="bg-gray-900 p-3 rounded-xl border border-gray-700 flex flex-col gap-3 animate-in zoom-in-95 duration-200">
+                              <img src={movie.poster} alt={movie.title} className="aspect-[2/3] object-cover rounded-lg bg-gray-800" />
+                              <div className="flex-grow">
+                                <p className="text-xs font-bold text-white truncate mb-2">{movie.title}</p>
+                                <button 
+                                  onClick={() => handleSaveToMyList(movie)}
+                                  className="w-full py-2 bg-gray-700 hover:bg-gray-600 text-[10px] font-bold rounded-lg transition flex items-center justify-center"
+                                >
+                                  <Plus size={12} className="mr-1" /> Adicionar
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
+              </div>
+
+              {/* MANUAL SECTION */}
+              <div className="bg-gray-800 rounded-2xl border border-gray-700 overflow-hidden shadow-lg transition-all duration-300">
+                <button onClick={() => toggleSection('manual')} className="w-full p-5 flex justify-between items-center text-left hover:bg-white/5 transition-colors">
+                  <div className="flex items-center">
+                    <Film className="mr-3 text-red-500" size={22} />
+                    <h3 className="text-lg font-bold text-white">Adicionar por Link IMDb</h3>
+                  </div>
+                  <ChevronDown className={`text-gray-400 transition-transform duration-300 ${expandedSection === 'manual' ? 'rotate-180' : ''}`} />
+                </button>
+                <div className={`transition-all duration-300 ease-in-out ${expandedSection === 'manual' ? 'max-h-[500px] opacity-100 p-5 pt-0' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                  <div className="pt-4 border-t border-gray-700">
+                    <form onSubmit={handleAddMovie} className="flex flex-col md:flex-row gap-3">
+                      <input
+                        type="url" value={imdbLink} onChange={(e) => setImdbLink(e.target.value)} required
+                        placeholder="Ex: https://www.imdb.com/title/tt0133093/"
+                        className="flex-grow bg-gray-900 border border-gray-600 rounded-xl px-4 py-3 text-white focus:ring-1 focus:ring-red-500 outline-none text-sm"
+                      />
+                      <select 
+                        value={movieStatus} onChange={(e) => setMovieStatus(e.target.value)}
+                        className="bg-gray-900 border border-gray-600 rounded-xl px-4 text-white text-sm outline-none"
+                      >
+                        <option value="Quero assistir">🍿 Quero assistir</option>
+                        <option value="Assistido">✅ Assistido</option>
+                        <option value="Favorito">⭐ Favorito</option>
+                      </select>
+                      <button type="submit" disabled={isLoading} className="bg-red-600 hover:bg-red-700 disabled:opacity-50 px-6 py-3 rounded-xl font-bold text-white transition whitespace-nowrap">
+                        {isLoading ? 'A buscar...' : 'Adicionar'}
+                      </button>
+                    </form>
+                    {successMsg && <p className="text-green-400 text-xs mt-2">{successMsg}</p>}
+                    {errorMsg && <p className="text-red-400 text-xs mt-2">{errorMsg}</p>}
+                  </div>
+                </div>
+              </div>
+
+              {/* FRIEND SECTION */}
+              <div className="bg-gray-800 rounded-2xl border border-gray-700 overflow-hidden shadow-lg transition-all duration-300">
+                <button onClick={() => toggleSection('friend')} className="w-full p-5 flex justify-between items-center text-left hover:bg-white/5 transition-colors">
+                  <div className="flex items-center">
+                    <Users className="mr-3 text-blue-400" size={22} />
+                    <h3 className="text-lg font-bold text-white">Encontrar Amigos</h3>
+                  </div>
+                  <ChevronDown className={`text-gray-400 transition-transform duration-300 ${expandedSection === 'friend' ? 'rotate-180' : ''}`} />
+                </button>
+                <div className={`transition-all duration-300 ease-in-out ${expandedSection === 'friend' ? 'max-h-[600px] opacity-100 p-5 pt-0' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                  <div className="pt-4 border-t border-gray-700 flex flex-col md:flex-row gap-6">
+                    <div className="flex-grow">
+                      <p className="text-xs text-gray-400 mb-3">Cole o ID do seu amigo para visitar a lista dele.</p>
+                      <div className="flex gap-2">
+                        <input 
+                          type="text" placeholder="Cole o ID aqui..."
+                          value={friendSearchText} onChange={e => setFriendSearchText(e.target.value)}
+                          className="flex-grow bg-gray-900 border border-gray-700 rounded-xl px-4 py-2 text-sm text-white outline-none"
+                        />
+                        <button onClick={() => { if(friendSearchText) { setTargetUserId(friendSearchText.trim()); navigateTo('publicList'); setActiveFilter('Todos'); } }} className="bg-gray-700 hover:bg-gray-600 px-6 rounded-xl text-sm font-bold">Procurar</button>
+                      </div>
+                    </div>
+                    {savedLists.length > 0 && (
+                      <div className="md:w-1/3 border-t md:border-t-0 md:border-l border-gray-700 pt-4 md:pt-0 md:pl-6">
+                        <h4 className="text-[10px] uppercase font-bold text-gray-500 mb-3 flex items-center"><Bookmark className="mr-1" size={12}/> Listas Guardadas</h4>
+                        <div className="space-y-2 max-h-[150px] overflow-y-auto pr-1">
+                          {savedLists.map(list => (
+                            <div key={list.id} className="flex items-center justify-between bg-gray-900 p-2 rounded-lg border border-gray-800 group">
+                               <span className="text-xs text-gray-300 cursor-pointer hover:text-white truncate" onClick={() => { setTargetUserId(list.friendId); navigateTo('publicList'); setActiveFilter('Todos'); }}>{list.name}</span>
+                               <Trash2 size={14} className="text-gray-600 hover:text-red-500 cursor-pointer transition opacity-0 group-hover:opacity-100" onClick={() => handleRemoveSavedList(list.id)}/>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
         )}
@@ -747,144 +806,103 @@ export default function App() {
           <div className="max-w-5xl mx-auto w-full px-4 py-8">
             <div className="mb-8 bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-700 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div>
-                <h2 className="text-2xl font-bold mb-2 flex items-center">
-                  <UserIcon className="mr-3 text-red-500" />
-                  Lista de Indicações
-                </h2>
-                <p className="text-gray-400 text-sm mb-2">
-                  Veja a organização e avalie os filmes indicados.
-                </p>
-                <div className="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded inline-block">
-                  A visualizar ID: <span className="text-red-400 font-mono">{targetUserId}</span>
-                </div>
+                <h2 className="text-2xl font-bold mb-1 flex items-center"><UserIcon className="mr-3 text-red-500" /> Lista de Amigo</h2>
+                <div className="text-[10px] text-gray-500 uppercase tracking-widest bg-gray-900 px-2 py-1 rounded inline-block">Visualizando: <span className="text-red-400 font-mono">{targetUserId}</span></div>
               </div>
-              
-              <div className="flex flex-col sm:flex-row gap-3 mt-4 md:mt-0 w-full md:w-auto">
+              <div className="flex gap-3 mt-4 md:mt-0 w-full md:w-auto">
                 {!isGuest && (
-                  <button 
-                    onClick={currentSavedList ? () => handleRemoveSavedList(currentSavedList.id) : handleSaveFriendList}
-                    className={`text-sm px-4 py-2.5 rounded-lg transition font-bold flex items-center justify-center ${
-                      currentSavedList 
-                        ? 'bg-gray-700 text-green-400 hover:bg-gray-600' 
-                        : 'bg-red-600/20 text-red-400 border border-red-500/50 hover:bg-red-600/30'
-                    }`}
-                  >
-                    {currentSavedList ? <Bookmark className="mr-2 fill-current" size={18}/> : <BookmarkPlus className="mr-2" size={18}/>}
-                    {currentSavedList ? 'Lista Guardada' : 'Acompanhar Lista'}
+                  <button onClick={currentSavedList ? () => handleRemoveSavedList(currentSavedList.id) : handleSaveFriendList} className={`flex-1 md:flex-none text-xs px-4 py-3 rounded-xl font-bold flex items-center justify-center transition ${currentSavedList ? 'bg-gray-700 text-green-400' : 'bg-red-600/20 text-red-400 border border-red-500/50'}`}>
+                    {currentSavedList ? <Bookmark className="mr-2 fill-current" size={14}/> : <BookmarkPlus className="mr-2" size={14}/>}
+                    {currentSavedList ? 'Guardada' : 'Acompanhar'}
                   </button>
                 )}
-                
-                <button 
-                  onClick={() => { navigateTo(isGuest ? 'landing' : 'dashboard'); setTargetUserId(''); setActiveFilter('Todos'); window.history.pushState({}, '', window.location.pathname); }}
-                  className="text-sm px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition flex justify-center"
-                >
-                  Voltar
-                </button>
+                <button onClick={() => { navigateTo(isGuest ? 'landing' : 'dashboard'); setTargetUserId(''); setActiveFilter('Todos'); window.history.pushState({}, '', window.location.pathname); }} className="flex-1 md:flex-none text-xs px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold transition">Voltar</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* --- BARRA DE FILTROS & GRELHA DE FILMES --- */}
+        {/* --- LISTAGEM DE FILMES (GRID) --- */}
         {(view === 'dashboard' || view === 'publicList') && (
-          <div className="max-w-5xl mx-auto w-full px-4 pb-8">
-            <div className="mb-6 flex items-center space-x-2 overflow-x-auto pb-2 scrollbar-hide">
-              <Filter size={20} className="text-gray-500 mr-2 flex-shrink-0" />
-              {['Todos', 'Quero assistir', 'Assistido', 'Favorito'].map((filter) => (
-                <button
-                  key={filter}
-                  onClick={() => setActiveFilter(filter)}
-                  className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-colors border ${
-                    activeFilter === filter 
-                      ? 'bg-gray-700 text-white border-gray-500' 
-                      : 'bg-gray-900 text-gray-400 border-gray-700 hover:bg-gray-800'
-                  }`}
+          <div className="max-w-5xl mx-auto w-full px-4 pb-16">
+            <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center space-x-2 overflow-x-auto pb-2 scrollbar-hide">
+                <Filter size={18} className="text-gray-500 mr-1 flex-shrink-0" />
+                {['Todos', 'Quero assistir', 'Assistido', 'Favorito'].map((filter) => (
+                  <button
+                    key={filter} onClick={() => setActiveFilter(filter)}
+                    className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition border ${activeFilter === filter ? 'bg-gray-700 text-white border-gray-500 shadow-lg' : 'bg-gray-900 text-gray-400 border-gray-700 hover:bg-gray-800'}`}
+                  >
+                    {filter === 'Todos' ? '📚 Tudo' : filter === 'Quero assistir' ? '🍿 Quero' : filter === 'Assistido' ? '✅ Vi' : '⭐ Top'}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="text-[10px] text-gray-500 uppercase font-bold">Ordenar:</span>
+                <select 
+                  value={sortBy} 
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="bg-gray-900 border border-gray-700 text-white text-xs rounded-lg px-3 py-1.5 outline-none focus:border-red-500 cursor-pointer transition"
                 >
-                  {filter === 'Todos' ? '📚 Todos' : filter === 'Quero assistir' ? '🍿 Quero assistir' : filter === 'Assistido' ? '✅ Assistido' : '⭐ Favoritos'}
-                </button>
-              ))}
+                  <option value="recentes">Mais recentes</option>
+                  <option value="antigos">Mais antigos</option>
+                  <option value="nota">Melhor nota</option>
+                </select>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
               {displayedMovies.length === 0 ? (
-                <div className="col-span-full py-16 text-center text-gray-500">
-                  <Film size={48} className="mx-auto mb-4 opacity-20" />
-                  <p>{view === 'publicList' ? 'Nenhum filme encontrado para este filtro.' : 'Não encontrou nada aqui! Que tal adicionar um filme?'}</p>
+                <div className="col-span-full py-24 text-center text-gray-500 animate-in fade-in zoom-in duration-300">
+                  <Film size={48} className="mx-auto mb-4 opacity-10" />
+                  <p className="text-sm">Nenhum filme por aqui ainda!</p>
                 </div>
               ) : (
                 displayedMovies.map((movie) => {
                   const isOwner = user?.uid === movie.ownerId;
                   const userRating = movie.ratings?.[user?.uid] || 0;
-                  const totalRatingsCount = movie.ratings ? Object.keys(movie.ratings).length : 0;
                   const avgRating = calculateAverageRating(movie.ratings);
-                  
                   const currentStatus = movie.status || 'Quero assistir';
 
                   return (
-                    <div key={movie.id} className="bg-gray-800 rounded-xl overflow-hidden shadow-lg border border-gray-700 flex flex-col group relative">
-                      
+                    <div key={movie.id} className="bg-gray-800 rounded-2xl overflow-hidden shadow-lg border border-gray-700 flex flex-col relative group transition-all hover:shadow-2xl hover:border-gray-500">
                       <div className="relative aspect-[2/3] w-full bg-gray-900 overflow-hidden">
-                        <img 
-                          src={movie.poster} alt={movie.title}
-                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                        />
-                        
-                        <div className={`absolute top-0 left-0 text-[10px] md:text-xs font-bold px-2 py-1 rounded-br-lg shadow-md backdrop-blur-md ${getStatusColor(currentStatus)}`}>
+                        <img src={movie.poster} alt={movie.title} className="w-full h-full object-cover group-hover:scale-110 transition duration-500" />
+                        <div className={`absolute top-0 left-0 text-[10px] font-bold px-2 py-1 rounded-br-xl shadow-lg backdrop-blur-md ${getStatusColor(currentStatus)}`}>
                           {currentStatus === 'Favorito' ? '⭐' : currentStatus === 'Assistido' ? '✅' : '🍿'}
                         </div>
-
-                        <div className="absolute top-0 right-0 bg-black/80 backdrop-blur-sm text-white px-2 py-1 m-1.5 md:m-2 rounded-md flex items-center text-[11px] md:text-sm font-bold shadow-md">
-                          <Star size={12} className="text-yellow-400 fill-yellow-400 mr-1" />
-                          {avgRating}
+                        <div className="absolute top-0 right-0 bg-black/70 backdrop-blur-sm text-white px-2 py-1 m-2 rounded-lg flex items-center text-[10px] font-bold shadow-md border border-white/10">
+                          <Star size={10} className="text-yellow-400 fill-yellow-400 mr-1" />{avgRating}
                         </div>
                       </div>
                       
-                      <div className="p-3 md:p-4 flex-grow flex flex-col">
-                        <h3 className="text-sm md:text-base font-bold text-white mb-1 line-clamp-2 leading-snug" title={movie.title}>{movie.title}</h3>
+                      <div className="p-3 flex-grow flex flex-col">
+                        <h3 className="text-xs font-bold text-white mb-2 line-clamp-2 leading-snug" title={movie.title}>{movie.title}</h3>
                         
-                        <p className="hidden md:block text-xs text-gray-400 mb-3 line-clamp-3 flex-grow">{movie.plot}</p>
-                        
-                        <div className="mt-auto pt-2 md:pt-4 border-t border-gray-700 flex-grow-0">
+                        <div className="mt-auto pt-3 border-t border-gray-700/50">
                           {isOwner ? (
-                            <div className="space-y-2 md:space-y-3">
-                              <div className="flex flex-col space-y-1">
-                                <select 
-                                  value={currentStatus}
-                                  onChange={(e) => handleUpdateStatus(movie.id, e.target.value)}
-                                  className={`text-[11px] md:text-xs p-1 rounded font-bold focus:outline-none focus:ring-1 focus:ring-gray-400 w-full truncate ${getStatusColor(currentStatus)}`}
-                                >
-                                  <option value="Quero assistir" className="bg-gray-800 text-white">Quero assistir</option>
-                                  <option value="Assistido" className="bg-gray-800 text-white">Assistido</option>
-                                  <option value="Favorito" className="bg-gray-800 text-white">Favorito</option>
-                                </select>
-                              </div>
-                              
-                              <div className="flex justify-between items-center pt-1 md:pt-2 border-t border-gray-700/50">
-                                <div className="text-[10px] md:text-xs text-gray-400 truncate pr-1">
-                                  {totalRatingsCount} {totalRatingsCount === 1 ? 'voto' : 'votos'}
-                                </div>
-                                <button onClick={() => handleDeleteMovie(movie.id)} className="text-[10px] md:text-xs text-red-400 hover:text-red-300 font-medium">
-                                  Remover
-                                </button>
+                            <div className="space-y-2">
+                              <select 
+                                value={currentStatus} onChange={(e) => handleUpdateStatus(movie.id, e.target.value)}
+                                className={`text-[10px] p-1.5 rounded-lg font-bold w-full truncate outline-none ${getStatusColor(currentStatus)}`}
+                              >
+                                <option value="Quero assistir" className="bg-gray-800">Quero assistir</option>
+                                <option value="Assistido" className="bg-gray-800">Assistido</option>
+                                <option value="Favorito" className="bg-gray-800">Favorito</option>
+                              </select>
+                              <div className="flex justify-end pt-1">
+                                <button onClick={() => handleDeleteMovie(movie.id)} className="text-[10px] text-red-500 hover:text-red-400 font-bold transition p-1">Remover</button>
                               </div>
                             </div>
                           ) : (
-                            <div className="space-y-1 md:space-y-2">
-                              <p className="text-[10px] md:text-xs text-gray-400 font-medium truncate">A sua nota:</p>
+                            <div className="space-y-2">
+                              <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest">A sua nota</p>
                               <StarRating rating={userRating} onRate={(val) => handleRateMovie(movie.id, movie.ratings, val)} readonly={false} />
-                              
-                              {!user?.isAnonymous && !movies.some(m => m.ownerId === user?.uid && m.imdbId === movie.imdbId) ? (
-                                <button 
-                                  onClick={() => handleSaveToMyList(movie)}
-                                  className="mt-2 w-full text-[10px] md:text-xs bg-gray-700 hover:bg-gray-600 text-white py-1.5 rounded transition flex items-center justify-center"
-                                >
-                                  <Plus size={12} className="mr-1" /> Adicionar à minha lista
+                              {!user?.isAnonymous && !movies.some(m => m.ownerId === user?.uid && m.imdbId === movie.imdbId) && (
+                                <button onClick={() => handleSaveToMyList(movie)} className="w-full mt-2 py-1.5 bg-gray-700 hover:bg-gray-600 text-[10px] font-bold rounded-lg flex items-center justify-center transition">
+                                  <Plus size={10} className="mr-1" /> Copiar
                                 </button>
-                              ) : !user?.isAnonymous ? (
-                                <div className="mt-2 w-full text-[10px] md:text-xs bg-green-900/30 text-green-400 py-1.5 rounded text-center border border-green-800/50">
-                                  ✓ Na sua lista
-                                </div>
-                              ) : null}
+                              )}
                             </div>
                           )}
                         </div>
@@ -898,16 +916,14 @@ export default function App() {
         )}
       </main>
 
-      {/* RODAPÉ (FOOTER) ADMOB / ADSENSE READY */}
-      <footer className="bg-gray-900 border-t border-gray-800 mt-auto py-8">
-        <div className="max-w-5xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-4">
-          <div className="text-gray-500 text-sm flex items-center">
-            <Film className="mr-2" size={16} />
-            &copy; {new Date().getFullYear()} Cine Indica. Todos os direitos reservados.
+      <footer className="bg-gray-900 border-t border-gray-800 py-10 mt-auto">
+        <div className="max-w-5xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-6">
+          <div className="text-gray-500 text-[10px] uppercase font-bold tracking-widest flex items-center">
+            <Film className="mr-2" size={14} /> &copy; {new Date().getFullYear()} Cine Indica
           </div>
-          <div className="flex space-x-6 text-sm font-medium">
-            <button onClick={() => navigateTo('privacy')} className="text-gray-400 hover:text-white transition">Política de Privacidade</button>
-            <button onClick={() => navigateTo('terms')} className="text-gray-400 hover:text-white transition">Termos de Uso</button>
+          <div className="flex space-x-6 text-xs font-bold">
+            <button onClick={() => navigateTo('privacy')} className="text-gray-500 hover:text-red-500 transition">Privacidade</button>
+            <button onClick={() => navigateTo('terms')} className="text-gray-500 hover:text-red-500 transition">Termos</button>
           </div>
         </div>
       </footer>
